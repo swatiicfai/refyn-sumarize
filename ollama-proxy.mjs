@@ -33,7 +33,7 @@ app.post('/api/generate', async (req, res) => {
   ];
 
   const body = {
-    model: req.body.model || 'phi3',
+    model: req.body.model || 'mistral',
     messages: messages,
     stream: false,
     options: {
@@ -77,5 +77,5 @@ app.listen(PORT, () => {
   console.log(`Health: GET http://localhost:${PORT}/api/health`);
   console.log(`Generate: POST http://localhost:${PORT}/api/generate`);
   console.log('\nMake sure Ollama is running: ollama serve');
-  console.log('And phi3 model is installed: ollama pull phi3');
+  console.log('And mistral model is installed: ollama pull mistral');
 });

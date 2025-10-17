@@ -7,7 +7,7 @@ document.getElementById('testModel').addEventListener('click', async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'phi3',
+        model: 'mistral',
         messages: [
           { role: 'system', content: 'You are a helpful assistant.' },
           { role: 'user', content: 'Say hello from Refyne(A real-time, on-device AI writing coach that corrects grammar, refines tone, and drafts content instantly).' }
@@ -49,7 +49,7 @@ document.getElementById('rewriteBtn').addEventListener('click', async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'phi3',
+        model: 'mistral',
         messages: [
           { role: 'system', content: 'You are a helpful assistant that suggests alternative phrasing. Provide exactly 3 alternatives, each on a new line, numbered 1-3.' },
           { role: 'user', content: `Suggest 3 alternative ways to phrase this in a professional tone: "${keyword}"` }
