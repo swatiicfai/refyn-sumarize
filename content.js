@@ -346,7 +346,7 @@ function handleInput(e) {
         }
       );
     }
-  }, 1000);
+  }, 1500);
 }
 
 document.addEventListener("input", handleInput);
