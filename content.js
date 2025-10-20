@@ -1,361 +1,439 @@
-console.log("The Proactive Pen content script loaded!");
+// Improved content script with better state management and UX
 
-const tooltip = document.createElement("div");
-Object.assign(tooltip.style, {
-  position: "absolute",
-  background: "#fff",
-  border: "1px solid #ccc",
-  padding: "6px 10px",
-  borderRadius: "4px",
-  boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
-  zIndex: "999999",
-  display: "none",
-  fontSize: "13px",
-  maxWidth: "300px",
-  cursor: "pointer",
-});
-document.body.appendChild(tooltip);
+console.log("Refyne v2 content script loaded!");
 
-let debounceTimeout = null;
-let currentController = null;
+// ==================== CONFIG ====================
+const CONFIG = {
+  debounceDelay: 1200,
+  minTextLength: 5,
+  maxSuggestions: 1,
+  highlightColor: '#fff3cd',
+  highlightBorder: '2px solid #ffc107',
+  apiUrl: 'http://localhost:3000/api/generate'
+};
 
-function showTooltip(html, x, y, applyCallback) {
-  tooltip.innerHTML = html;
-  tooltip.style.left = x + "px";
-  tooltip.style.top = y + "px";
-  tooltip.style.display = "block";
-  tooltip.onclick = () => {
-    applyCallback();
-    tooltip.style.display = "none";
-  };
+// ==================== STATE MANAGEMENT ====================
+class RefyneState {
+  constructor() {
+    this.activeElement = null;
+    this.currentSuggestion = null;
+    this.isApplying = false;
+    this.debounceTimer = null;
+    this.abortController = null;
+  }
+
+  reset() {
+    this.activeElement = null;
+    this.currentSuggestion = null;
+    this.isApplying = false;
+    if (this.abortController) this.abortController.abort();
+  }
 }
 
-function hideTooltip() {
-  tooltip.style.display = "none";
-}
+const state = new RefyneState();
 
-async function fetchSuggestions(text) {
-  if (!text || text.length < 3) return [];
-  try {
-    if (currentController) currentController.abort();
-    currentController = new AbortController();
+// ==================== UI COMPONENTS ====================
+class TooltipManager {
+  constructor() {
+    this.tooltip = this.createTooltip();
+    document.body.appendChild(this.tooltip);
+  }
+
+  createTooltip() {
+    const tooltip = document.createElement('div');
+    tooltip.id = 'refyne-tooltip';
+    Object.assign(tooltip.style, {
+      position: 'fixed',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      color: 'white',
+      padding: '12px 16px',
+      borderRadius: '8px',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+      zIndex: '2147483647',
+      display: 'none',
+      fontSize: '13px',
+      maxWidth: '350px',
+      cursor: 'pointer',
+      transition: 'all 0.2s ease',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    });
     
-    const response = await fetch("http://localhost:3000/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    tooltip.addEventListener('mouseenter', () => {
+      tooltip.style.transform = 'scale(1.02)';
+    });
+    
+    tooltip.addEventListener('mouseleave', () => {
+      tooltip.style.transform = 'scale(1)';
+    });
+    
+    return tooltip;
+  }
+
+  show(suggestion, rect) {
+    const { original, corrected, reason } = suggestion;
+    
+    this.tooltip.innerHTML = `
+      <div style="margin-bottom: 6px;">
+        <strong style="font-size: 11px; opacity: 0.9; text-transform: uppercase; letter-spacing: 0.5px;">Suggestion</strong>
+      </div>
+      <div style="margin-bottom: 8px;">
+        <div style="text-decoration: line-through; opacity: 0.8; margin-bottom: 4px;">"${original}"</div>
+        <div style="font-weight: 600;">"${corrected}"</div>
+      </div>
+      ${reason ? `<div style="font-size: 11px; opacity: 0.85; font-style: italic;">${reason}</div>` : ''}
+      <div style="margin-top: 8px; font-size: 11px; opacity: 0.7;">Click to apply</div>
+    `;
+    
+    // Position tooltip
+    const tooltipRect = this.tooltip.getBoundingClientRect();
+    let top = rect.bottom + window.scrollY + 8;
+    let left = rect.left + window.scrollX;
+    
+    // Keep tooltip in viewport
+    if (left + tooltipRect.width > window.innerWidth) {
+      left = window.innerWidth - tooltipRect.width - 10;
+    }
+    
+    this.tooltip.style.left = left + 'px';
+    this.tooltip.style.top = top + 'px';
+    this.tooltip.style.display = 'block';
+  }
+
+  hide() {
+    this.tooltip.style.display = 'none';
+  }
+}
+
+const tooltipManager = new TooltipManager();
+
+// ==================== HIGHLIGHTING ====================
+class HighlightManager {
+  constructor() {
+    this.activeHighlight = null;
+  }
+
+  highlightText(element, original) {
+    this.removeHighlight();
+    
+    if (!element.isContentEditable) return null;
+    
+    const text = element.textContent;
+    const index = text.indexOf(original);
+    
+    if (index === -1) return null;
+    
+    const range = document.createRange();
+    const walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false
+    );
+    
+    let charCount = 0;
+    let startNode = null;
+    let startOffset = 0;
+    let endNode = null;
+    let endOffset = 0;
+    
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const nodeLength = node.textContent.length;
+      
+      if (!startNode && charCount + nodeLength > index) {
+        startNode = node;
+        startOffset = index - charCount;
+      }
+      
+      if (startNode && charCount + nodeLength >= index + original.length) {
+        endNode = node;
+        endOffset = index + original.length - charCount;
+        break;
+      }
+      
+      charCount += nodeLength;
+    }
+    
+    if (startNode && endNode) {
+      range.setStart(startNode, startOffset);
+      range.setEnd(endNode, endOffset);
+      
+      const highlight = document.createElement('span');
+      highlight.className = 'refyne-highlight';
+      Object.assign(highlight.style, {
+        backgroundColor: CONFIG.highlightColor,
+        borderBottom: CONFIG.highlightBorder,
+        cursor: 'pointer',
+        padding: '2px 0',
+        borderRadius: '2px',
+        transition: 'all 0.2s ease'
+      });
+      
+      try {
+        range.surroundContents(highlight);
+        this.activeHighlight = highlight;
+        return highlight;
+      } catch (e) {
+        console.warn('Could not surround range:', e);
+        return null;
+      }
+    }
+    
+    return null;
+  }
+
+  removeHighlight() {
+    const highlights = document.querySelectorAll('.refyne-highlight');
+    highlights.forEach(h => {
+      const parent = h.parentNode;
+      while (h.firstChild) {
+        parent.insertBefore(h.firstChild, h);
+      }
+      parent.removeChild(h);
+      parent.normalize();
+    });
+    this.activeHighlight = null;
+  }
+}
+
+const highlightManager = new HighlightManager();
+
+// ==================== API ====================
+async function fetchSuggestions(text) {
+  if (!text || text.length < CONFIG.minTextLength) return [];
+  
+  try {
+    if (state.abortController) state.abortController.abort();
+    state.abortController = new AbortController();
+    
+    const response = await fetch(CONFIG.apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: "mistral",
+        model: 'mistral',
         messages: [
           {
-            role: "system",
-            content: `You are an intelligent writing refinement assistant. Analyze the context and purpose of the text, then suggest ONE meaningful improvement.
+            role: 'system',
+            content: `You are a writing refinement assistant. Analyze text and suggest ONE improvement.
 
-ANALYSIS STEPS:
-1. Detect the context (email, chat, social post, formal doc, creative writing, etc.)
-2. Identify the tone (casual, professional, friendly, formal, urgent, etc.)
-3. Find the most important improvement needed
+RESPONSE FORMAT (JSON only):
+[{"original": "exact text to replace", "corrected": "improved version", "reason": "brief explanation"}]
 
-WHAT TO REFINE:
-- Grammar & spelling errors (always fix these)
-- Awkward or unclear phrasing
-- Tone mismatches (too casual for formal context, too stiff for friendly chat)
-- Weak word choices that could be stronger
-- Redundant or wordy expressions
-- Missing politeness markers (please, thank you) in requests
-- Overly aggressive or blunt language that could be softer
-- Passive voice that should be active (in professional contexts)
+RULES:
+- "original" must be 5-30 words from the input text
+- Fix grammar, clarity, or tone issues
+- Keep changes natural and minimal
+- Return [] if text is perfect
 
-REFINEMENT PRINCIPLES:
-- Match the detected context and tone
-- Make it sound natural and fluent
-- Keep the user's core message intact
-- Fix only ONE thing at a time (the most important)
-- The "original" MUST be an exact substring from the input
-- Suggest 5-20 word replacements (not too short, not too long)
-
-OUTPUT (JSON only):
-[{"original": "exact text from input", "corrected": "context-appropriate refined version"}]
-
-If text is already well-written, return: []
-
-EXAMPLES:
-Input: "hey can u send me the report"
-Context: Professional email
-Output: [{"original": "hey can u send me the report", "corrected": "Hi, could you please send me the report?"}]
-
-Input: "I am writing to inquire if you are available lol"
-Context: Professional inquiry
-Output: [{"original": "inquire if you are available lol", "corrected": "inquire if you are available"}]
-
-Input: "thanks alot for you're help yesterday"
-Context: Thank you message
-Output: [{"original": "thanks alot for you're help", "corrected": "thanks a lot for your help"}]
-
-Input: "The data shows we needs to pivot"
-Context: Business report
-Output: [{"original": "shows we needs to pivot", "corrected": "shows we need to pivot"}]`
+EXAMPLE:
+Input: "I goed to store yesterday"
+Output: [{"original": "I goed to store", "corrected": "I went to the store", "reason": "Grammar correction"}]`
           },
           {
-            role: "user",
-            content: `Analyze and refine this text: "${text}"\n\nReturn JSON only.`
+            role: 'user',
+            content: `Analyze: "${text}"`
           }
         ],
         temperature: 0.1,
-        max_tokens: 200,
+        max_tokens: 150
       }),
-      signal: currentController.signal,
-    }).catch(err => {
-      if (err.name !== "AbortError") {
-        console.error("Network error - Is the proxy running on port 3000?");
-      }
-      throw err;
+      signal: state.abortController.signal
     });
 
-    currentController = null;
-
-    if (!response.ok) {
-      return [];
-    }
+    if (!response.ok) return [];
 
     const data = await response.json();
-    if (data.response) {
-      try {
-        let cleaned = data.response.trim();
-        
-        cleaned = cleaned.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        
-        const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
-        if (jsonMatch) {
-          cleaned = jsonMatch[0];
-        }
-        
-        const suggestions = JSON.parse(cleaned);
-        if (Array.isArray(suggestions) && suggestions.length > 0) {
-          const validSuggestions = suggestions.filter(s => {
-            if (!s.original || !s.corrected) return false;
-            if (s.original === s.corrected) return false;
-            if (text.indexOf(s.original) === -1) return false;
-            return true;
-          });
-          return validSuggestions.slice(0, 1);
-        }
-      } catch (err) {
-        console.error("Parse error:", err);
-        console.error("Response was:", data.response);
+    if (!data.response) return [];
+
+    let cleaned = data.response.trim()
+      .replace(/```json\n?/g, '')
+      .replace(/```\n?/g, '')
+      .trim();
+    
+    const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
+    if (jsonMatch) cleaned = jsonMatch[0];
+    
+    const suggestions = JSON.parse(cleaned);
+    return Array.isArray(suggestions) 
+      ? suggestions.filter(s => 
+          s.original && 
+          s.corrected && 
+          s.original !== s.corrected &&
+          text.includes(s.original)
+        ).slice(0, CONFIG.maxSuggestions)
+      : [];
+      
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.error('Refyne API error:', err);
+    }
+    return [];
+  }
+}
+
+// ==================== SUGGESTION APPLICATION ====================
+function applySuggestion(element, original, corrected) {
+  if (state.isApplying) return;
+  state.isApplying = true;
+  
+  highlightManager.removeHighlight();
+  tooltipManager.hide();
+  
+  if (element.isContentEditable) {
+    const text = element.textContent;
+    const index = text.indexOf(original);
+    
+    if (index !== -1) {
+      element.textContent = text.substring(0, index) + corrected + text.substring(index + original.length);
+      
+      // Set cursor after replacement
+      const range = document.createRange();
+      const sel = window.getSelection();
+      const textNode = element.firstChild;
+      
+      if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+        const newPos = index + corrected.length;
+        range.setStart(textNode, Math.min(newPos, textNode.length));
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
       }
     }
-    return [];
-  } catch (err) {
-    if (err.name === "AbortError") return [];
-    return [];
-  }
-}
-
-function applyToTextarea(target, original, corrected) {
-  const text = target.value;
-  const index = text.indexOf(original);
-  if (index === -1) return;
-  
-  const before = text.substring(0, index);
-  const after = text.substring(index + original.length);
-  target.value = before + corrected + after;
-  
-  const newCursorPos = before.length + corrected.length;
-  target.setSelectionRange(newCursorPos, newCursorPos);
-  target.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-function applyToContentEditable(target, original, corrected) {
-  // First remove any existing highlights
-  removeHighlights(target);
-  
-  const text = target.innerText || target.textContent;
-  const index = text.indexOf(original);
-  
-  console.log("Applying to contentEditable:", { original, corrected, text, index });
-  
-  if (index === -1) {
-    console.warn("Original text not found in target");
-    return;
-  }
-  
-  const before = text.substring(0, index);
-  const after = text.substring(index + original.length);
-  
-  // Clear and rebuild content
-  target.textContent = before + corrected + after;
-  
-  // Set cursor position
-  try {
-    const range = document.createRange();
-    const sel = window.getSelection();
-    const textNode = target.firstChild;
-    if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-      const newPos = before.length + corrected.length;
-      range.setStart(textNode, Math.min(newPos, textNode.length));
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
+  } else {
+    const text = element.value;
+    const index = text.indexOf(original);
+    
+    if (index !== -1) {
+      element.value = text.substring(0, index) + corrected + text.substring(index + original.length);
+      const newPos = index + corrected.length;
+      element.setSelectionRange(newPos, newPos);
     }
-  } catch (err) {
-    console.error("Cursor error:", err);
   }
   
-  // Trigger input event so we can check for more suggestions
-  target.dispatchEvent(new Event('input', { bubbles: true }));
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  
+  state.reset();
+  state.isApplying = false;
+  
+  // Check for more suggestions after a delay
+  setTimeout(() => {
+    if (!state.isApplying) {
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }, 800);
 }
 
-function highlightText(target, original) {
-  if (!target.isContentEditable) return;
+// ==================== MAIN HANDLER ====================
+async function handleInput(e) {
+  const element = e.target;
   
-  // Remove any existing highlights first
-  removeHighlights(target);
+  const isEditable = 
+    element.isContentEditable ||
+    element.tagName === 'TEXTAREA' ||
+    (element.tagName === 'INPUT' && element.type === 'text');
   
-  const text = target.innerText || target.textContent;
-  const index = text.indexOf(original);
+  if (!isEditable || state.isApplying) return;
   
-  console.log("Highlighting:", { original, text, index });
-  
-  if (index === -1) {
-    console.warn("Text to highlight not found:", original);
-    return;
+  // Clean up previous state
+  if (state.activeElement !== element) {
+    highlightManager.removeHighlight();
+    tooltipManager.hide();
   }
   
-  const before = text.substring(0, index);
-  const highlighted = text.substring(index, index + original.length);
-  const after = text.substring(index + original.length);
+  state.activeElement = element;
   
-  // Clear content
-  target.innerHTML = '';
-  
-  // Add before text
-  if (before) {
-    target.appendChild(document.createTextNode(before));
-  }
-  
-  // Add highlighted span
-  const highlight = document.createElement('span');
-  highlight.textContent = highlighted;
-  highlight.style.backgroundColor = '#ffe58f';
-  highlight.style.borderBottom = '2px solid #ff9800';
-  highlight.style.cursor = 'pointer';
-  highlight.style.padding = '2px 0';
-  highlight.className = 'refyne-highlight';
-  highlight.title = 'Click to fix';
-  target.appendChild(highlight);
-  
-  // Add after text
-  if (after) {
-    target.appendChild(document.createTextNode(after));
-  }
-  
-  console.log("✓ Highlight applied successfully");
-}
-
-function removeHighlights(target) {
-  if (!target.isContentEditable) return;
-  const highlights = target.querySelectorAll('.refyne-highlight');
-  highlights.forEach(h => {
-    const text = document.createTextNode(h.textContent);
-    h.parentNode.replaceChild(text, h);
-  });
-  target.normalize();
-}
-
-let activeTarget = null;
-let activeSuggestion = null;
-
-function handleInput(e) {
-  const target = e.target;
-  const isEditable =
-    target.isContentEditable ||
-    target.tagName === "TEXTAREA" ||
-    (target.tagName === "INPUT" && target.type === "text");
-  
-  if (!isEditable) return;
-
-  hideTooltip();
-  if (activeTarget && activeTarget !== target) {
-    removeHighlights(activeTarget);
-  }
-
-  clearTimeout(debounceTimeout);
-  debounceTimeout = setTimeout(async () => {
-    const text = target.value || target.innerText;
-    if (!text || text.length < 3) return;
-
-    console.log("Checking text:", text.substring(0, 50) + "...");
+  clearTimeout(state.debounceTimer);
+  state.debounceTimer = setTimeout(async () => {
+    const text = element.value || element.textContent;
+    if (!text || text.length < CONFIG.minTextLength) return;
     
     const suggestions = await fetchSuggestions(text);
     
-    console.log("Suggestions received:", suggestions);
-    
-    if (!suggestions || suggestions.length === 0) {
-      if (activeTarget === target) {
-        removeHighlights(target);
-        activeTarget = null;
-        activeSuggestion = null;
-      }
+    if (suggestions.length === 0) {
+      highlightManager.removeHighlight();
+      tooltipManager.hide();
+      state.currentSuggestion = null;
       return;
     }
-
-    const suggestion = suggestions[0];
-    console.log("✓ Suggestion found:", suggestion);
     
-    activeTarget = target;
-    activeSuggestion = suggestion;
-
-    if (target.isContentEditable) {
-      removeHighlights(target);
-      highlightText(target, suggestion.original);
+    const suggestion = suggestions[0];
+    state.currentSuggestion = suggestion;
+    
+    if (element.isContentEditable) {
+      const highlight = highlightManager.highlightText(element, suggestion.original);
       
-      const highlight = target.querySelector('.refyne-highlight');
       if (highlight) {
+        const rect = highlight.getBoundingClientRect();
+        tooltipManager.show(suggestion, rect);
+        
         highlight.onclick = (e) => {
           e.preventDefault();
           e.stopPropagation();
-          console.log("Highlight clicked, applying correction...");
-          applyToContentEditable(target, suggestion.original, suggestion.corrected);
-          activeTarget = null;
-          activeSuggestion = null;
-          // Check for next suggestion after a short delay
-          setTimeout(() => {
-            const evt = new Event('input', { bubbles: true });
-            target.dispatchEvent(evt);
-          }, 500);
+          applySuggestion(element, suggestion.original, suggestion.corrected);
         };
-      } else {
-        console.warn("Highlight element not found after creation");
+        
+        highlight.onmouseenter = () => {
+          highlight.style.backgroundColor = '#ffe082';
+        };
+        
+        highlight.onmouseleave = () => {
+          highlight.style.backgroundColor = CONFIG.highlightColor;
+        };
       }
     } else {
-      const rect = target.getBoundingClientRect();
-      showTooltip(
-        `<strong>Suggestion:</strong><br>"${suggestion.original}" → "${suggestion.corrected}"<br><small>Click to apply</small>`,
-        rect.left + window.scrollX,
-        rect.bottom + window.scrollY + 5,
-        () => {
-          console.log("Tooltip clicked, applying correction...");
-          applyToTextarea(target, suggestion.original, suggestion.corrected);
-          activeTarget = null;
-          activeSuggestion = null;
-          // Check for next suggestion
-          setTimeout(() => {
-            const evt = new Event('input', { bubbles: true });
-            target.dispatchEvent(evt);
-          }, 500);
-        }
-      );
+      const rect = element.getBoundingClientRect();
+      tooltipManager.show(suggestion, rect);
     }
-  }, 1500);
+  }, CONFIG.debounceDelay);
 }
 
-document.addEventListener("input", handleInput);
-document.addEventListener("scroll", hideTooltip);
-document.addEventListener("resize", hideTooltip);
-document.addEventListener("mousedown", (e) => {
-  if (!tooltip.contains(e.target) && !e.target.classList.contains('refyne-highlight')) {
-    hideTooltip();
+// ==================== EVENT LISTENERS ====================
+document.addEventListener('input', handleInput, true);
+
+document.addEventListener('click', (e) => {
+  if (e.target.id === 'refyne-tooltip' && state.currentSuggestion) {
+    applySuggestion(
+      state.activeElement,
+      state.currentSuggestion.original,
+      state.currentSuggestion.corrected
+    );
+  } else if (!e.target.closest('.refyne-highlight') && !e.target.closest('#refyne-tooltip')) {
+    tooltipManager.hide();
   }
 });
 
-console.log("The Proactive Pen is ready!");
+document.addEventListener('scroll', () => {
+  if (state.activeElement && state.currentSuggestion) {
+    const highlight = document.querySelector('.refyne-highlight');
+    if (highlight) {
+      const rect = highlight.getBoundingClientRect();
+      tooltipManager.show(state.currentSuggestion, rect);
+    }
+  }
+}, true);
+
+window.addEventListener('resize', () => {
+  tooltipManager.hide();
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  // ESC to dismiss suggestion
+  if (e.key === 'Escape') {
+    highlightManager.removeHighlight();
+    tooltipManager.hide();
+    state.reset();
+  }
+  
+  // Ctrl/Cmd + Enter to apply suggestion
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && state.currentSuggestion) {
+    e.preventDefault();
+    applySuggestion(
+      state.activeElement,
+      state.currentSuggestion.original,
+      state.currentSuggestion.corrected
+    );
+  }
+});
+
+console.log("✨ Refyne is ready! Press ESC to dismiss, Ctrl+Enter to apply.");
