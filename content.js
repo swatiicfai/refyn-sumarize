@@ -1,439 +1,358 @@
-// Improved content script with better state management and UX
+console.log("Refyne content script loaded!");
 
-console.log("Refyne v2 content script loaded!");
+const tooltip = document.createElement("div");
+Object.assign(tooltip.style, {
+  position: "fixed",
+  background: "#fff",
+  border: "1px solid #ccc",
+  padding: "8px 12px",
+  borderRadius: "6px",
+  boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+  zIndex: "1000000",
+  display: "none",
+  fontSize: "14px",
+  maxWidth: "350px",
+  cursor: "pointer",
+  fontFamily: "Arial, sans-serif",
+  lineHeight: "1.4"
+});
+document.body.appendChild(tooltip);
 
-// ==================== CONFIG ====================
-const CONFIG = {
-  debounceDelay: 1200,
-  minTextLength: 5,
-  maxSuggestions: 1,
-  highlightColor: '#fff3cd',
-  highlightBorder: '2px solid #ffc107',
-  apiUrl: 'http://localhost:3000/api/generate'
-};
+let debounceTimeout = null;
+let currentController = null;
+let activeTarget = null;
+let activeSuggestion = null;
 
-// ==================== STATE MANAGEMENT ====================
-class RefyneState {
-  constructor() {
-    this.activeElement = null;
-    this.currentSuggestion = null;
-    this.isApplying = false;
-    this.debounceTimer = null;
-    this.abortController = null;
-  }
-
-  reset() {
-    this.activeElement = null;
-    this.currentSuggestion = null;
-    this.isApplying = false;
-    if (this.abortController) this.abortController.abort();
-  }
+function showTooltip(html, x, y, applyCallback) {
+  tooltip.innerHTML = html;
+  tooltip.style.left = x + "px";
+  tooltip.style.top = y + "px";
+  tooltip.style.display = "block";
+  
+  tooltip.onclick = (e) => {
+    e.stopPropagation();
+    applyCallback();
+    hideTooltip();
+  };
 }
 
-const state = new RefyneState();
-
-// ==================== UI COMPONENTS ====================
-class TooltipManager {
-  constructor() {
-    this.tooltip = this.createTooltip();
-    document.body.appendChild(this.tooltip);
-  }
-
-  createTooltip() {
-    const tooltip = document.createElement('div');
-    tooltip.id = 'refyne-tooltip';
-    Object.assign(tooltip.style, {
-      position: 'fixed',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      color: 'white',
-      padding: '12px 16px',
-      borderRadius: '8px',
-      boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-      zIndex: '2147483647',
-      display: 'none',
-      fontSize: '13px',
-      maxWidth: '350px',
-      cursor: 'pointer',
-      transition: 'all 0.2s ease',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-    });
-    
-    tooltip.addEventListener('mouseenter', () => {
-      tooltip.style.transform = 'scale(1.02)';
-    });
-    
-    tooltip.addEventListener('mouseleave', () => {
-      tooltip.style.transform = 'scale(1)';
-    });
-    
-    return tooltip;
-  }
-
-  show(suggestion, rect) {
-    const { original, corrected, reason } = suggestion;
-    
-    this.tooltip.innerHTML = `
-      <div style="margin-bottom: 6px;">
-        <strong style="font-size: 11px; opacity: 0.9; text-transform: uppercase; letter-spacing: 0.5px;">Suggestion</strong>
-      </div>
-      <div style="margin-bottom: 8px;">
-        <div style="text-decoration: line-through; opacity: 0.8; margin-bottom: 4px;">"${original}"</div>
-        <div style="font-weight: 600;">"${corrected}"</div>
-      </div>
-      ${reason ? `<div style="font-size: 11px; opacity: 0.85; font-style: italic;">${reason}</div>` : ''}
-      <div style="margin-top: 8px; font-size: 11px; opacity: 0.7;">Click to apply</div>
-    `;
-    
-    // Position tooltip
-    const tooltipRect = this.tooltip.getBoundingClientRect();
-    let top = rect.bottom + window.scrollY + 8;
-    let left = rect.left + window.scrollX;
-    
-    // Keep tooltip in viewport
-    if (left + tooltipRect.width > window.innerWidth) {
-      left = window.innerWidth - tooltipRect.width - 10;
-    }
-    
-    this.tooltip.style.left = left + 'px';
-    this.tooltip.style.top = top + 'px';
-    this.tooltip.style.display = 'block';
-  }
-
-  hide() {
-    this.tooltip.style.display = 'none';
-  }
+function hideTooltip() {
+  tooltip.style.display = "none";
 }
 
-const tooltipManager = new TooltipManager();
-
-// ==================== HIGHLIGHTING ====================
-class HighlightManager {
-  constructor() {
-    this.activeHighlight = null;
-  }
-
-  highlightText(element, original) {
-    this.removeHighlight();
-    
-    if (!element.isContentEditable) return null;
-    
-    const text = element.textContent;
-    const index = text.indexOf(original);
-    
-    if (index === -1) return null;
-    
-    const range = document.createRange();
-    const walker = document.createTreeWalker(
-      element,
-      NodeFilter.SHOW_TEXT,
-      null,
-      false
-    );
-    
-    let charCount = 0;
-    let startNode = null;
-    let startOffset = 0;
-    let endNode = null;
-    let endOffset = 0;
-    
-    while (walker.nextNode()) {
-      const node = walker.currentNode;
-      const nodeLength = node.textContent.length;
-      
-      if (!startNode && charCount + nodeLength > index) {
-        startNode = node;
-        startOffset = index - charCount;
-      }
-      
-      if (startNode && charCount + nodeLength >= index + original.length) {
-        endNode = node;
-        endOffset = index + original.length - charCount;
-        break;
-      }
-      
-      charCount += nodeLength;
-    }
-    
-    if (startNode && endNode) {
-      range.setStart(startNode, startOffset);
-      range.setEnd(endNode, endOffset);
-      
-      const highlight = document.createElement('span');
-      highlight.className = 'refyne-highlight';
-      Object.assign(highlight.style, {
-        backgroundColor: CONFIG.highlightColor,
-        borderBottom: CONFIG.highlightBorder,
-        cursor: 'pointer',
-        padding: '2px 0',
-        borderRadius: '2px',
-        transition: 'all 0.2s ease'
-      });
-      
-      try {
-        range.surroundContents(highlight);
-        this.activeHighlight = highlight;
-        return highlight;
-      } catch (e) {
-        console.warn('Could not surround range:', e);
-        return null;
-      }
-    }
-    
-    return null;
-  }
-
-  removeHighlight() {
-    const highlights = document.querySelectorAll('.refyne-highlight');
-    highlights.forEach(h => {
-      const parent = h.parentNode;
-      while (h.firstChild) {
-        parent.insertBefore(h.firstChild, h);
-      }
-      parent.removeChild(h);
-      parent.normalize();
-    });
-    this.activeHighlight = null;
-  }
-}
-
-const highlightManager = new HighlightManager();
-
-// ==================== API ====================
 async function fetchSuggestions(text) {
-  if (!text || text.length < CONFIG.minTextLength) return [];
+  if (!text || text.trim().length < 3) return [];
   
   try {
-    if (state.abortController) state.abortController.abort();
-    state.abortController = new AbortController();
+    if (currentController) currentController.abort();
+    currentController = new AbortController();
     
-    const response = await fetch(CONFIG.apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'mistral',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a writing refinement assistant. Analyze text and suggest ONE improvement.
-
-RESPONSE FORMAT (JSON only):
-[{"original": "exact text to replace", "corrected": "improved version", "reason": "brief explanation"}]
-
-RULES:
-- "original" must be 5-30 words from the input text
-- Fix grammar, clarity, or tone issues
-- Keep changes natural and minimal
-- Return [] if text is perfect
-
-EXAMPLE:
-Input: "I goed to store yesterday"
-Output: [{"original": "I goed to store", "corrected": "I went to the store", "reason": "Grammar correction"}]`
-          },
-          {
-            role: 'user',
-            content: `Analyze: "${text}"`
-          }
-        ],
-        temperature: 0.1,
-        max_tokens: 150
-      }),
-      signal: state.abortController.signal
+    const response = await fetch("http://localhost:3000/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text }),
+      signal: currentController.signal,
+    }).catch(err => {
+      if (err.name !== "AbortError") {
+        console.error("Network error:", err);
+      }
+      throw err;
     });
 
-    if (!response.ok) return [];
+    currentController = null;
+
+    if (!response.ok) {
+      console.error("Server response not OK:", response.status);
+      return [];
+    }
 
     const data = await response.json();
-    if (!data.response) return [];
-
-    let cleaned = data.response.trim()
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
-      .trim();
+    console.log("Raw API response:", data);
     
-    const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
-    if (jsonMatch) cleaned = jsonMatch[0];
-    
-    const suggestions = JSON.parse(cleaned);
-    return Array.isArray(suggestions) 
-      ? suggestions.filter(s => 
-          s.original && 
-          s.corrected && 
-          s.original !== s.corrected &&
-          text.includes(s.original)
-        ).slice(0, CONFIG.maxSuggestions)
-      : [];
-      
-  } catch (err) {
-    if (err.name !== 'AbortError') {
-      console.error('Refyne API error:', err);
+    if (data.suggestions && Array.isArray(data.suggestions)) {
+      const validSuggestions = data.suggestions.filter(s => {
+        if (!s.original || !s.corrected) return false;
+        if (s.original === s.corrected) return false;
+        if (!text.includes(s.original)) {
+          console.log("Original text not found in input:", s.original);
+          return false;
+        }
+        return true;
+      });
+      console.log("Valid suggestions:", validSuggestions);
+      return validSuggestions.slice(0, 1);
     }
+    
+    return [];
+  } catch (err) {
+    if (err.name === "AbortError") return [];
+    console.error("Fetch error:", err);
     return [];
   }
 }
 
-// ==================== SUGGESTION APPLICATION ====================
-function applySuggestion(element, original, corrected) {
-  if (state.isApplying) return;
-  state.isApplying = true;
-  
-  highlightManager.removeHighlight();
-  tooltipManager.hide();
-  
+function getTextFromElement(element) {
   if (element.isContentEditable) {
-    const text = element.textContent;
-    const index = text.indexOf(original);
-    
-    if (index !== -1) {
-      element.textContent = text.substring(0, index) + corrected + text.substring(index + original.length);
-      
-      // Set cursor after replacement
-      const range = document.createRange();
-      const sel = window.getSelection();
-      const textNode = element.firstChild;
-      
-      if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-        const newPos = index + corrected.length;
-        range.setStart(textNode, Math.min(newPos, textNode.length));
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-      }
-    }
-  } else {
-    const text = element.value;
-    const index = text.indexOf(original);
-    
-    if (index !== -1) {
-      element.value = text.substring(0, index) + corrected + text.substring(index + original.length);
-      const newPos = index + corrected.length;
-      element.setSelectionRange(newPos, newPos);
-    }
+    return element.textContent || element.innerText || "";
+  } else if (element.tagName === "TEXTAREA" || element.tagName === "INPUT") {
+    return element.value || "";
   }
-  
-  element.dispatchEvent(new Event('input', { bubbles: true }));
-  
-  state.reset();
-  state.isApplying = false;
-  
-  // Check for more suggestions after a delay
-  setTimeout(() => {
-    if (!state.isApplying) {
-      element.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-  }, 800);
+  return "";
 }
 
-// ==================== MAIN HANDLER ====================
-async function handleInput(e) {
-  const element = e.target;
+function applySuggestion(target, original, corrected) {
+  const currentText = getTextFromElement(target);
+  const index = currentText.indexOf(original);
   
-  const isEditable = 
-    element.isContentEditable ||
-    element.tagName === 'TEXTAREA' ||
-    (element.tagName === 'INPUT' && element.type === 'text');
-  
-  if (!isEditable || state.isApplying) return;
-  
-  // Clean up previous state
-  if (state.activeElement !== element) {
-    highlightManager.removeHighlight();
-    tooltipManager.hide();
+  if (index === -1) {
+    console.warn("Original text not found for replacement");
+    return false;
   }
   
-  state.activeElement = element;
+  if (target.isContentEditable) {
+    applyToContentEditable(target, original, corrected);
+  } else {
+    applyToTextarea(target, original, corrected);
+  }
   
-  clearTimeout(state.debounceTimer);
-  state.debounceTimer = setTimeout(async () => {
-    const text = element.value || element.textContent;
-    if (!text || text.length < CONFIG.minTextLength) return;
+  return true;
+}
+
+function applyToTextarea(target, original, corrected) {
+  const text = target.value;
+  const index = text.indexOf(original);
+  if (index === -1) return;
+  
+  const before = text.substring(0, index);
+  const after = text.substring(index + original.length);
+  target.value = before + corrected + after;
+  
+  const newCursorPos = before.length + corrected.length;
+  target.setSelectionRange(newCursorPos, newCursorPos);
+  
+  // Trigger events to notify other scripts
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+  target.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function applyToContentEditable(target, original, corrected) {
+  // Save current selection
+  const selection = window.getSelection();
+  const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  
+  // Remove any existing highlights
+  removeHighlights(target);
+  
+  const text = target.textContent || target.innerText || "";
+  const index = text.indexOf(original);
+  
+  if (index === -1) return;
+  
+  const before = text.substring(0, index);
+  const after = text.substring(index + original.length);
+  
+  // Clear and rebuild content
+  target.textContent = before + corrected + after;
+  
+  // Try to restore cursor position
+  try {
+    const newRange = document.createRange();
+    const textNode = target.firstChild;
     
-    const suggestions = await fetchSuggestions(text);
+    if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+      const newPos = Math.min(before.length + corrected.length, textNode.length);
+      newRange.setStart(textNode, newPos);
+      newRange.collapse(true);
+      
+      selection.removeAllRanges();
+      selection.addRange(newRange);
+    }
+  } catch (err) {
+    console.error("Cursor restoration error:", err);
+  }
+  
+  // Trigger input event
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function highlightText(target, original) {
+  if (!target.isContentEditable) return null;
+  
+  const text = target.textContent || target.innerText || "";
+  const index = text.indexOf(original);
+  if (index === -1) return null;
+  
+  const before = text.substring(0, index);
+  const highlighted = text.substring(index, index + original.length);
+  const after = text.substring(index + original.length);
+  
+  // Clear and rebuild with highlight
+  target.innerHTML = '';
+  
+  if (before) {
+    target.appendChild(document.createTextNode(before));
+  }
+  
+  const highlightSpan = document.createElement('span');
+  highlightSpan.textContent = highlighted;
+  highlightSpan.style.backgroundColor = '#fff3cd';
+  highlightSpan.style.border = '1px solid #ffc107';
+  highlightSpan.style.borderRadius = '3px';
+  highlightSpan.style.padding = '1px 3px';
+  highlightSpan.style.cursor = 'pointer';
+  highlightSpan.style.color = '#000';
+  highlightSpan.className = 'refyne-highlight';
+  highlightSpan.title = 'Click to apply suggestion';
+  
+  target.appendChild(highlightSpan);
+  
+  if (after) {
+    target.appendChild(document.createTextNode(after));
+  }
+  
+  return highlightSpan;
+}
+
+function removeHighlights(target) {
+  if (!target.isContentEditable) return;
+  
+  const highlights = target.querySelectorAll('.refyne-highlight');
+  highlights.forEach(highlight => {
+    const textNode = document.createTextNode(highlight.textContent);
+    highlight.parentNode.replaceChild(textNode, highlight);
+  });
+  
+  // Normalize text nodes
+  target.normalize();
+}
+
+function handleInput(e) {
+  const target = e.target;
+  const isEditable =
+    target.isContentEditable ||
+    target.tagName === "TEXTAREA" ||
+    (target.tagName === "INPUT" && (target.type === "text" || target.type === "email" || target.type === "search" || !target.type));
+  
+  if (!isEditable) return;
+
+  // Hide previous tooltip and remove highlights
+  hideTooltip();
+  if (activeTarget && activeTarget !== target) {
+    removeHighlights(activeTarget);
+    activeTarget = null;
+    activeSuggestion = null;
+  }
+
+  // Clear existing timeout
+  clearTimeout(debounceTimeout);
+  
+  // Set new timeout
+  debounceTimeout = setTimeout(async () => {
+    const text = getTextFromElement(target);
     
-    if (suggestions.length === 0) {
-      highlightManager.removeHighlight();
-      tooltipManager.hide();
-      state.currentSuggestion = null;
+    if (!text || text.trim().length < 3) {
+      console.log("Text too short or empty");
       return;
     }
+
+    console.log("Analyzing text:", text.substring(0, 50) + "...");
     
+    const suggestions = await fetchSuggestions(text);
+    console.log("Received suggestions:", suggestions);
+    
+    if (!suggestions || suggestions.length === 0) {
+      console.log("No suggestions available");
+      if (activeTarget === target) {
+        removeHighlights(target);
+        activeTarget = null;
+        activeSuggestion = null;
+      }
+      return;
+    }
+
     const suggestion = suggestions[0];
-    state.currentSuggestion = suggestion;
+    console.log("Using suggestion:", suggestion);
     
-    if (element.isContentEditable) {
-      const highlight = highlightManager.highlightText(element, suggestion.original);
+    activeTarget = target;
+    activeSuggestion = suggestion;
+
+    if (target.isContentEditable) {
+      const highlightElement = highlightText(target, suggestion.original);
       
-      if (highlight) {
-        const rect = highlight.getBoundingClientRect();
-        tooltipManager.show(suggestion, rect);
-        
-        highlight.onclick = (e) => {
+      if (highlightElement) {
+        highlightElement.onclick = (e) => {
           e.preventDefault();
           e.stopPropagation();
-          applySuggestion(element, suggestion.original, suggestion.corrected);
-        };
-        
-        highlight.onmouseenter = () => {
-          highlight.style.backgroundColor = '#ffe082';
-        };
-        
-        highlight.onmouseleave = () => {
-          highlight.style.backgroundColor = CONFIG.highlightColor;
+          console.log("Applying suggestion to contenteditable");
+          applySuggestion(target, suggestion.original, suggestion.corrected);
+          setTimeout(() => {
+            removeHighlights(target);
+            activeTarget = null;
+            activeSuggestion = null;
+            // Re-check for more suggestions
+            handleInput({ target });
+          }, 300);
         };
       }
     } else {
-      const rect = element.getBoundingClientRect();
-      tooltipManager.show(suggestion, rect);
+      // For textareas and inputs
+      const rect = target.getBoundingClientRect();
+      const tooltipContent = `
+        <div style="font-weight: bold; margin-bottom: 4px;">Suggestion:</div>
+        <div style="margin-bottom: 4px;">
+          <span style="color: #666; text-decoration: line-through;">${suggestion.original}</span>
+          <span style="margin: 0 4px;">→</span>
+          <span style="color: #2e7d32; font-weight: 500;">${suggestion.corrected}</span>
+        </div>
+        <div style="font-size: 11px; color: #666;">Click to apply</div>
+      `;
+      
+      showTooltip(
+        tooltipContent,
+        rect.left + window.scrollX,
+        rect.bottom + window.scrollY + 8,
+        () => {
+          console.log("Applying suggestion to textarea/input");
+          applySuggestion(target, suggestion.original, suggestion.corrected);
+          activeTarget = null;
+          activeSuggestion = null;
+          setTimeout(() => handleInput({ target }), 300);
+        }
+      );
     }
-  }, CONFIG.debounceDelay);
+  }, 800); // Reduced debounce time for better responsiveness
 }
 
-// ==================== EVENT LISTENERS ====================
-document.addEventListener('input', handleInput, true);
-
-document.addEventListener('click', (e) => {
-  if (e.target.id === 'refyne-tooltip' && state.currentSuggestion) {
-    applySuggestion(
-      state.activeElement,
-      state.currentSuggestion.original,
-      state.currentSuggestion.corrected
-    );
-  } else if (!e.target.closest('.refyne-highlight') && !e.target.closest('#refyne-tooltip')) {
-    tooltipManager.hide();
-  }
-});
-
-document.addEventListener('scroll', () => {
-  if (state.activeElement && state.currentSuggestion) {
-    const highlight = document.querySelector('.refyne-highlight');
-    if (highlight) {
-      const rect = highlight.getBoundingClientRect();
-      tooltipManager.show(state.currentSuggestion, rect);
-    }
+// Enhanced event listeners
+document.addEventListener("input", handleInput, true);
+document.addEventListener("click", (e) => {
+  if (!tooltip.contains(e.target) && !e.target.classList.contains('refyne-highlight')) {
+    hideTooltip();
   }
 }, true);
 
-window.addEventListener('resize', () => {
-  tooltipManager.hide();
+// Handle page changes and dynamic content
+const observer = new MutationObserver((mutations) => {
+  mutations.forEach((mutation) => {
+    if (mutation.type === 'childList') {
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          // Re-initialize event listeners for new content
+          if (node.querySelectorAll) {
+            const editableElements = node.querySelectorAll('[contenteditable="true"], textarea, input[type="text"], input[type="email"]');
+            editableElements.forEach(el => {
+              el.addEventListener('input', handleInput, true);
+            });
+          }
+        }
+      });
+    }
+  });
 });
 
-// Keyboard shortcuts
-document.addEventListener('keydown', (e) => {
-  // ESC to dismiss suggestion
-  if (e.key === 'Escape') {
-    highlightManager.removeHighlight();
-    tooltipManager.hide();
-    state.reset();
-  }
-  
-  // Ctrl/Cmd + Enter to apply suggestion
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && state.currentSuggestion) {
-    e.preventDefault();
-    applySuggestion(
-      state.activeElement,
-      state.currentSuggestion.original,
-      state.currentSuggestion.corrected
-    );
-  }
+observer.observe(document.body, {
+  childList: true,
+  subtree: true
 });
 
-console.log("✨ Refyne is ready! Press ESC to dismiss, Ctrl+Enter to apply.");
+console.log("The Proactive Pen is ready and enhanced!");

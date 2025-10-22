@@ -50,118 +50,126 @@ function detectContext(text) {
   return { context: 'general', tone: 'neutral' };
 }
 
-// Advanced system prompt generator
+// Simplified system prompt for better JSON compliance
 function generateSystemPrompt(detectedContext) {
-  const baseRules = `You are an intelligent writing assistant. Analyze text and suggest ONE meaningful improvement.
+  const basePrompt = `You are a writing assistant. Analyze the text and suggest ONE improvement.
+Return ONLY valid JSON array format: [{"original": "text", "corrected": "text", "reason": "brief reason"}]
+Rules:
+- "original" must exist exactly in the input (5-30 words)
+- "corrected" should match the context
+- Return [] if no improvements needed
+- No extra text, only JSON
 
-CRITICAL RULES:
-1. Return ONLY valid JSON: [{"original": "...", "corrected": "...", "reason": "..."}]
-2. "original" must be 5-30 words and exist exactly in the input
-3. "corrected" should be natural and context-appropriate
-4. "reason" should be brief (under 10 words)
-5. Return [] if text is already perfect
-6. NEVER add markdown, explanations, or extra text`;
+Context: ${detectedContext.context} (${detectedContext.tone} tone)
+Focus: Fix grammar, clarity, tone, or word choice`;
 
-  const contextRules = {
-    email: `
-CONTEXT: Professional Email
-FOCUS ON:
-- Professional greetings (Hi/Hello vs hey)
-- Clear subject lines
-- Polite closings (Best regards, Thank you)
-- Remove casual language (lol, btw, etc)
-- Add "please" and "thank you" where appropriate`,
-
-    social: `
-CONTEXT: Social Media / Chat
-FOCUS ON:
-- Keep it casual but readable
-- Fix major grammar errors only
-- Don't make it too formal
-- Maintain conversational tone`,
-
-    formal: `
-CONTEXT: Formal Document
-FOCUS ON:
-- Passive voice → Active voice
-- Verbose phrases → Concise alternatives
-- Maintain professional terminology
-- Ensure proper grammar`,
-
-    technical: `
-CONTEXT: Technical Writing
-FOCUS ON:
-- Clarity and precision
-- Consistent terminology
-- Remove ambiguity
-- Proper technical terms`,
-
-    creative: `
-CONTEXT: Creative Writing
-FOCUS ON:
-- Show vs Tell improvements
-- More vivid descriptions
-- Stronger word choices
-- Maintain author's voice`,
-
-    general: `
-CONTEXT: General Writing
-FOCUS ON:
-- Grammar and spelling
-- Clarity improvements
-- Remove redundancy
-- Natural phrasing`
-  };
-
-  const examples = `
-EXAMPLES:
-
-Input: "hey can u send the report asap"
-Context: Email
-Output: [{"original": "hey can u send the report asap", "corrected": "Hi, could you please send the report as soon as possible?", "reason": "More professional tone"}]
-
-Input: "I seen that movie yesterday it was good"
-Context: Social
-Output: [{"original": "I seen that movie", "corrected": "I saw that movie", "reason": "Grammar correction"}]
-
-Input: "The thing is very important for success"
-Context: Formal
-Output: [{"original": "The thing is very important", "corrected": "This factor is crucial", "reason": "More precise language"}]
-
-Input: "The solution works good and is reliable"
-Context: Technical
-Output: [{"original": "works good", "corrected": "works well", "reason": "Correct adverb usage"}]`;
-
-  return `${baseRules}\n\n${contextRules[detectedContext.context] || contextRules.general}\n\n${examples}`;
+  return basePrompt;
 }
 
-// Smart text analyzer
-function analyzeText(text) {
-  const analysis = {
-    length: text.length,
-    wordCount: text.split(/\s+/).length,
-    hasErrors: false,
-    detectedIssues: []
-  };
-
-  // Common error patterns
-  const errorPatterns = [
-    { regex: /\b(your|you're)\s+(going|gonna)\b/i, issue: 'contraction' },
-    { regex: /\b(could|should|would)\s+of\b/i, issue: 'common_mistake' },
-    { regex: /\b(alot|alright)\b/i, issue: 'spelling' },
-    { regex: /[.!?]\s*[a-z]/g, issue: 'capitalization' },
-    { regex: /\s{2,}/g, issue: 'spacing' },
-  ];
-
-  errorPatterns.forEach(({ regex, issue }) => {
-    if (regex.test(text)) {
-      analysis.hasErrors = true;
-      analysis.detectedIssues.push(issue);
+// Main generation endpoint - FIXED for content.js compatibility
+app.post('/api/generate', async (req, res) => {
+  const startTime = Date.now();
+  
+  try {
+    const { text } = req.body; // Only expect text from content script
+    
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ 
+        error: 'Text is required',
+        suggestions: [] 
+      });
     }
-  });
 
-  return analysis;
-}
+    // Simple validation
+    if (text.trim().length < 3) {
+      return res.json({ suggestions: [] });
+    }
+
+    const detectedContext = detectContext(text);
+    
+    console.log(`[${new Date().toISOString()}] Processing:`, {
+      length: text.length,
+      context: detectedContext.context,
+      preview: text.substring(0, 50) + '...'
+    });
+
+    const systemPrompt = generateSystemPrompt(detectedContext);
+
+    // Call Ollama with simplified request
+    const ollamaResponse = await fetch(`${OLLAMA_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'mistral',
+        messages: [
+          { 
+            role: 'system', 
+            content: systemPrompt 
+          },
+          { 
+            role: 'user', 
+            content: `Text: "${text}"\n\nReturn JSON array only:` 
+          }
+        ],
+        stream: false,
+        options: {
+          temperature: 0.1,
+          num_predict: 150,
+          top_p: 0.8
+        }
+      })
+    });
+
+    if (!ollamaResponse.ok) {
+      throw new Error(`Ollama error: ${ollamaResponse.status}`);
+    }
+
+    const data = await ollamaResponse.json();
+    const responseText = data.message?.content || '';
+
+    // Parse response
+    let suggestions = [];
+    try {
+      // Extract JSON from response
+      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed)) {
+          suggestions = parsed.filter(s => 
+            s && 
+            s.original && 
+            s.corrected && 
+            s.original !== s.corrected &&
+            text.includes(s.original)
+          ).slice(0, 2); // Max 2 suggestions
+        }
+      }
+    } catch (parseError) {
+      console.error('Parse error:', parseError.message);
+      console.error('Raw response:', responseText.substring(0, 200));
+      suggestions = [];
+    }
+
+    const processingTime = Date.now() - startTime;
+    
+    // Return EXACTLY what content.js expects
+    res.json({
+      suggestions: suggestions, // This is the key field content.js looks for
+      meta: {
+        context: detectedContext.context,
+        processingTime: `${processingTime}ms`
+      }
+    });
+
+  } catch (err) {
+    console.error('Server error:', err);
+    // Return proper structure even on error
+    res.status(500).json({
+      error: err.message,
+      suggestions: [] // Always include suggestions array
+    });
+  }
+});
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
@@ -169,169 +177,34 @@ app.get('/api/health', async (req, res) => {
     const response = await fetch(`${OLLAMA_URL}/api/tags`);
     const data = await response.json();
     
-    const mistralInstalled = data.models?.some(m => m.name.includes('mistral'));
+    const mistralInstalled = data.models?.some(m => 
+      m.name.includes('mistral') || m.name.includes('llama')
+    );
     
     res.json({
       status: 'Ollama running',
-      models: data.models || [],
       mistralReady: mistralInstalled,
-      timestamp: new Date().toISOString()
+      models: data.models?.map(m => m.name) || []
     });
   } catch (err) {
     res.status(503).json({
       error: 'Cannot connect to Ollama',
-      message: err.message,
-      hint: 'Run: ollama serve'
+      suggestions: [] // Consistent structure
     });
   }
 });
 
-// Main generation endpoint
-app.post('/api/generate', async (req, res) => {
-  const startTime = Date.now();
-  
-  try {
-    const { text, context: userContext, tone: userTone } = req.body;
-    
-    if (!text) {
-      return res.status(400).json({ error: 'Text is required' });
-    }
-
-    // Analyze input
-    const analysis = analyzeText(text);
-    const detectedContext = userContext ? 
-      { context: userContext, tone: userTone || 'neutral' } : 
-      detectContext(text);
-
-    console.log(`[${new Date().toISOString()}] Analyzing text:`, {
-      length: text.length,
-      context: detectedContext.context,
-      tone: detectedContext.tone,
-      hasErrors: analysis.hasErrors
-    });
-
-    // Generate context-aware system prompt
-    const systemPrompt = generateSystemPrompt(detectedContext);
-
-    // Call Ollama
-    const ollamaResponse = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'mistral',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Analyze this ${detectedContext.context} text: "${text}"` }
-        ],
-        stream: false,
-        options: {
-          temperature: 0.1,
-          num_predict: 200,
-          top_p: 0.9
-        }
-      })
-    });
-
-    if (!ollamaResponse.ok) {
-      const errorText = await ollamaResponse.text();
-      console.error('Ollama error:', errorText);
-      return res.status(ollamaResponse.status).json({
-        error: 'Ollama request failed',
-        details: errorText
-      });
-    }
-
-    const data = await ollamaResponse.json();
-    const responseText = data.message?.content || data.response || '';
-
-    // Parse and validate response
-    let suggestions = [];
-    try {
-      let cleaned = responseText.trim()
-        .replace(/```json\n?/g, '')
-        .replace(/```\n?/g, '')
-        .trim();
-      
-      const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        cleaned = jsonMatch[0];
-        suggestions = JSON.parse(cleaned);
-        
-        // Validate suggestions
-        suggestions = suggestions.filter(s => 
-          s.original && 
-          s.corrected && 
-          s.original !== s.corrected &&
-          text.includes(s.original)
-        );
-      }
-    } catch (parseError) {
-      console.error('Parse error:', parseError);
-      console.error('Response was:', responseText);
-    }
-
-    const processingTime = Date.now() - startTime;
-    
-    res.json({
-      suggestions,
-      meta: {
-        context: detectedContext.context,
-        tone: detectedContext.tone,
-        analysis,
-        processingTime: `${processingTime}ms`,
-        model: 'mistral'
-      }
-    });
-
-  } catch (err) {
-    console.error('Server error:', err);
-    res.status(500).json({
-      error: 'Internal server error',
-      message: err.message
-    });
-  }
-});
-
-// Batch processing endpoint
-app.post('/api/batch', async (req, res) => {
-  const { texts } = req.body;
-  
-  if (!Array.isArray(texts)) {
-    return res.status(400).json({ error: 'texts must be an array' });
-  }
-
-  try {
-    const results = await Promise.all(
-      texts.map(text => 
-        fetch('http://localhost:3000/api/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text })
-        }).then(r => r.json())
-      )
-    );
-    
-    res.json({ results });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Stats endpoint
-let requestCount = 0;
-let suggestionCount = 0;
-
-app.use((req, res, next) => {
-  if (req.path === '/api/generate') requestCount++;
-  next();
-});
-
-app.get('/api/stats', (req, res) => {
+// Simple test endpoint for content script
+app.post('/api/test', async (req, res) => {
+  // Return a mock suggestion for testing
   res.json({
-    requests: requestCount,
-    suggestions: suggestionCount,
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString()
+    suggestions: [
+      {
+        original: "test text",
+        corrected: "improved test text", 
+        reason: "test suggestion"
+      }
+    ]
   });
 });
 
@@ -339,21 +212,11 @@ app.get('/api/stats', (req, res) => {
 const PORT = 3000;
 app.listen(PORT, () => {
   console.log(`
-╔═══════════════════════════════════════════╗
-║     🚀 Refyne Proxy Server v2.0          ║
-╚═══════════════════════════════════════════╝
+✅ Refyne Server Fixed for Content Script
+📍 Port: ${PORT}
+🔗 Health: http://localhost:${PORT}/api/health
+📝 Generate: POST http://localhost:${PORT}/api/generate
 
-✓ Server running on http://localhost:${PORT}
-✓ Health check: GET /api/health
-✓ Generate: POST /api/generate
-✓ Batch: POST /api/batch
-✓ Stats: GET /api/stats
-
-📋 Checklist:
-  1. Ollama running? → ollama serve
-  2. Mistral installed? → ollama pull mistral
-  3. Extension loaded? → chrome://extensions
-
-Ready to refine your writing! 🎯
+Now compatible with content.js structure!
 `);
 });
