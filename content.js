@@ -27,10 +27,136 @@ let isDownloading = false;
 let isEnabled = true;
 let downloadAttempted = false;
 let downloadProgress = 0;
+let offlineMode = false;
+let offlineChecker = null;
+
+function initializeOfflineChecker() {
+    offlineChecker = {
+        rules: [
+            {
+                name: "subject_verb_agreement",
+                pattern: /\b(He|She|It)\s+(have|do|are|were)\b/gi,
+                replacement: (match, p1, p2) => {
+                    const corrections = {
+                        'have': 'has', 'do': 'does', 'are': 'is', 'were': 'was'
+                    };
+                    return `${p1} ${corrections[p2.toLowerCase()] || p2}`;
+                }
+            },
+            {
+                name: "apostrophe_its",
+                pattern: /\b(it's)\b/gi,
+                replacement: (match) => {
+                    return match.toLowerCase() === "it's" ? "its" : match;
+                }
+            },
+            {
+                name: "your_youre",
+                pattern: /\b(your)\s+(welcome|amazing|great|awesome)\b/gi,
+                replacement: "you're $2"
+            },
+            {
+                name: "then_than",
+                pattern: /\b(then)\b/gi,
+                replacement: (match, offset, string) => {
+                    const nearbyWords = string.slice(Math.max(0, offset - 10), offset + 10);
+                    if (/\b(more|less|better|worse|rather|other)\b/i.test(nearbyWords)) {
+                        return 'than';
+                    }
+                    return match;
+                }
+            },
+            {
+                name: "there_their",
+                pattern: /\b(there)\s+(house|car|home|family|friend|team)\b/gi,
+                replacement: "their $2"
+            }
+        ],
+        
+        dictionary: {
+            'recieve': 'receive',
+            'seperate': 'separate',
+            'definately': 'definitely',
+            'occured': 'occurred',
+            'alot': 'a lot',
+            'untill': 'until',
+            'wich': 'which',
+            'teh': 'the',
+            'adn': 'and',
+            'thier': 'their',
+            'tounge': 'tongue',
+            'truely': 'truly',
+            'wierd': 'weird',
+            'neccessary': 'necessary',
+            'pronounciation': 'pronunciation'
+        },
+
+        checkText(text) {
+            if (!text || text.trim().length < 3) return null;
+
+            let corrected = text;
+            let corrections = [];
+            let hasCorrections = false;
+            Object.keys(this.dictionary).forEach(misspelling => {
+                const regex = new RegExp(`\\b${misspelling}\\b`, 'gi');
+                if (regex.test(corrected)) {
+                    const original = misspelling;
+                    const fixed = this.dictionary[misspelling];
+                    corrected = corrected.replace(regex, fixed);
+                    corrections.push({
+                        original: original,
+                        corrected: fixed,
+                        type: 'spelling'
+                    });
+                    hasCorrections = true;
+                }
+            });
+            this.rules.forEach(rule => {
+                const regex = new RegExp(rule.pattern.source, 'gi');
+                let match;
+                while ((match = regex.exec(corrected)) !== null) {
+                    const original = match[0];
+                    const fixed = typeof rule.replacement === 'function' 
+                        ? rule.replacement(...match, match.index, corrected)
+                        : original.replace(regex, rule.replacement);
+                    
+                    if (fixed !== original) {
+                        corrected = corrected.slice(0, match.index) + fixed + 
+                                   corrected.slice(match.index + original.length);
+                        corrections.push({
+                            original: original,
+                            corrected: fixed,
+                            type: 'grammar',
+                            rule: rule.name
+                        });
+                        hasCorrections = true;
+                        regex.lastIndex = 0;
+                    }
+                }
+            });
+            if (corrected.length > 0 && corrected[0] !== corrected[0].toUpperCase()) {
+                corrected = corrected.charAt(0).toUpperCase() + corrected.slice(1);
+                hasCorrections = true;
+            }
+
+            if (!hasCorrections) return null;
+
+            return {
+                original: text,
+                corrected: corrected,
+                corrections: corrections,
+                reason: "Offline grammar and spelling check",
+                source: "offline"
+            };
+        }
+    };
+    return true;
+}
 
 function isChromeAIAvailable() {
     return 'Rewriter' in self;
 }
+
 async function monitorDownloadProgress() {
     if (!isChromeAIAvailable()) return;
     
@@ -41,6 +167,7 @@ async function monitorDownloadProgress() {
             if (availability === 'available') {
                 console.log("Download completed!");
                 isDownloading = false;
+                offlineMode = false;
                 showStatusMessage("AI model ready! Start typing to get suggestions.", "success");
                 setTimeout(hideStatusMessage, 3000);
                 clearInterval(checkProgress);
@@ -58,10 +185,12 @@ async function monitorDownloadProgress() {
         console.error("Download monitoring error:", error);
     }
 }
+
 async function initializeRewriter() {
     if (!isChromeAIAvailable()) {
         console.log("Rewriter API not available in this browser");
-        showStatusMessage("AI features not available in this browser", "error");
+        showStatusMessage("AI features not available - using offline mode", "warning");
+        offlineMode = true;
         return false;
     }
 
@@ -71,7 +200,8 @@ async function initializeRewriter() {
 
         if (availability === 'unavailable') {
             console.log("Rewriter API is unavailable");
-            showStatusMessage("AI model unavailable. Check Chrome flags.", "error");
+            showStatusMessage("AI model unavailable - using offline mode", "warning");
+            offlineMode = true;
             return false;
         }
 
@@ -79,7 +209,7 @@ async function initializeRewriter() {
             console.log("AI model needs download - triggering...");
             isDownloading = true;
             downloadAttempted = true;
-            showStatusMessage("Downloading AI model... This may take a few minutes.", "info");
+            showStatusMessage("Downloading AI model... This may take a few minutes. Using offline mode meanwhile.", "info");
             
             monitorDownloadProgress();
         }
@@ -98,12 +228,14 @@ async function initializeRewriter() {
         if (finalAvailability === 'available') {
             console.log("Model is ready to use!");
             isDownloading = false;
+            offlineMode = false;
             showStatusMessage("AI model ready!", "success");
             setTimeout(hideStatusMessage, 2000);
         } else if (finalAvailability === 'downloading') {
             console.log("Download in progress...");
             isDownloading = true;
-            showStatusMessage("Downloading AI model...", "info");
+            offlineMode = true;
+            showStatusMessage("Downloading AI model... Using offline mode.", "info");
         }
         
         return true;
@@ -111,10 +243,12 @@ async function initializeRewriter() {
         console.error("Failed to initialize Rewriter:", error);
         
         if (error.message.includes('download') || error.message?.includes('Download')) {
-            showStatusMessage("Download in progress...", "info");
+            showStatusMessage("Download in progress... Using offline mode.", "info");
+            offlineMode = true;
             monitorDownloadProgress();
         } else {
-            showStatusMessage("Failed to initialize AI features", "error");
+            showStatusMessage("Failed to initialize AI features - using offline mode", "warning");
+            offlineMode = true;
         }
         return false;
     }
@@ -166,17 +300,14 @@ function hideStatusMessage() {
     }
 }
 
-async function getSuggestions(text) {
-    if (!text || text.trim().length < 5) return null;
-    if (!rewriterInstance) return null;
-    if (isDownloading) return null;
-    if (!isEnabled) return null;
+async function getAISuggestions(text) {
+    if (!rewriterInstance || isDownloading || !isEnabled) return null;
 
     try {
         const availability = await Rewriter.availability();
         if (availability !== 'available') return null;
 
-        console.log("Getting suggestions for text:", text.substring(0, 50) + "...");
+        console.log("Getting AI suggestions for text:", text.substring(0, 50) + "...");
         
         const result = await rewriterInstance.rewrite(text, {
             context: "Improve this text for clarity, grammar, and professionalism while keeping the original meaning."
@@ -187,7 +318,8 @@ async function getSuggestions(text) {
         return {
             original: text,
             corrected: result,
-            reason: "AI-improved version"
+            reason: "AI-improved version",
+            source: "ai"
         };
     } catch (err) {
         console.error("Rewriter API error:", err);
@@ -195,8 +327,37 @@ async function getSuggestions(text) {
     }
 }
 
-function showTooltip(html, x, y, applyCallback) {
-    tooltip.innerHTML = html;
+function getOfflineSuggestions(text) {
+    if (!offlineChecker || !isEnabled) return null;
+    
+    try {
+        const result = offlineChecker.checkText(text);
+        return result;
+    } catch (error) {
+        console.error("Offline checker error:", error);
+        return null;
+    }
+}
+
+async function getSuggestions(text) {
+    if (!text || text.trim().length < 3) return null;
+    if (!isEnabled) return null;
+    if (!offlineMode && !isDownloading) {
+        const aiSuggestion = await getAISuggestions(text);
+        if (aiSuggestion) return aiSuggestion;
+    }
+    const offlineSuggestion = getOfflineSuggestions(text);
+    if (offlineSuggestion) return offlineSuggestion;
+
+    return null;
+}
+
+function showTooltip(html, x, y, applyCallback, source = "ai") {
+    const sourceIndicator = source === "offline" 
+        ? '<div style="font-size:10px;color:#888;text-align:right;margin-top:8px;">🔒 Offline Mode</div>'
+        : '<div style="font-size:10px;color:#888;text-align:right;margin-top:8px;">🤖 AI Powered</div>';
+    
+    tooltip.innerHTML = html + sourceIndicator;
     
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
@@ -246,7 +407,8 @@ function applySuggestion(target, original, corrected) {
         chrome.runtime.sendMessage({ 
             action: 'correctionApplied', 
             original, 
-            corrected 
+            corrected,
+            source: offlineMode ? 'offline' : 'ai'
         }).catch(err => console.log('Background message failed:', err));
         
         showStatusMessage("Suggestion applied!", "success");
@@ -273,7 +435,7 @@ async function handleInput(e) {
     
     debounceTimeout = setTimeout(async () => {
         const text = getTextFromElement(target);
-        if (!text || text.trim().length < 5) return;
+        if (!text || text.trim().length < 3) return;
 
         try {
             const response = await new Promise(resolve => {
@@ -286,29 +448,24 @@ async function handleInput(e) {
 
         if (!isEnabled) return;
 
-        const availability = await Rewriter.availability();
-        if (availability !== 'available') {
-            if (availability === 'downloading') {
-                showStatusMessage("AI model downloading...", "info");
-                setTimeout(hideStatusMessage, 2000);
-            }
-            return;
-        }
-
         const suggestion = await getSuggestions(text);
         if (!suggestion) return;
 
         activeTarget = target;
         activeSuggestion = suggestion;
 
-        const rect = target.getBoundingClientRect();
+        const source = suggestion.source || (offlineMode ? "offline" : "ai");
+        const titleColor = source === "offline" ? "#FF9800" : "#4caf50";
+        const titleText = source === "offline" ? "Refyne Offline Suggestion" : "Refyne AI Suggestion";
+        
         const tooltipContent = `
-            <div style="font-weight:bold;color:#4caf50;margin-bottom:8px;font-size:16px;">Refyne AI Suggestion</div>
+            <div style="font-weight:bold;color:${titleColor};margin-bottom:8px;font-size:16px;">${titleText}</div>
             <div style="color:#666;text-decoration:line-through;font-size:13px;margin-bottom:6px;padding:4px;background:#f5f5f5;border-radius:4px;">${suggestion.original}</div>
             <div style="color:#2e7d32;font-weight:500;margin-bottom:8px;padding:4px;background:#e8f5e8;border-radius:4px;">${suggestion.corrected}</div>
             <div style="font-size:12px;color:#666;text-align:center;border-top:1px solid #eee;padding-top:8px;">Click to apply suggestion</div>
         `;
         
+        const rect = target.getBoundingClientRect();
         showTooltip(
             tooltipContent,
             rect.left + window.scrollX,
@@ -317,36 +474,64 @@ async function handleInput(e) {
                 applySuggestion(target, suggestion.original, suggestion.corrected);
                 activeTarget = null;
                 activeSuggestion = null;
-            }
+            },
+            source
         );
     }, 2000);
 }
 
 async function getAIStatus() {
     if (!isChromeAIAvailable()) {
-        return { status: 'unavailable', message: 'AI API Not Available' };
+        return { 
+            status: 'unavailable', 
+            message: 'AI API Not Available',
+            offline: true,
+            mode: 'offline'
+        };
     }
 
     try {
         const availability = await Rewriter.availability();
         
         let message = '';
+        let mode = 'ai';
         switch(availability) {
-            case 'available': message = 'AI Model Ready'; break;
-            case 'downloadable': message = 'AI Model Needs Download'; break;
-            case 'downloading': message = 'Downloading AI Model'; break;
-            case 'unavailable': default: message = 'AI Model Unavailable'; break;
+            case 'available': 
+                message = 'AI Model Ready'; 
+                mode = 'ai';
+                break;
+            case 'downloadable': 
+                message = 'AI Model Needs Download'; 
+                mode = 'offline';
+                break;
+            case 'downloading': 
+                message = 'Downloading AI Model'; 
+                mode = 'offline';
+                break;
+            case 'unavailable': 
+            default: 
+                message = 'AI Model Unavailable'; 
+                mode = 'offline';
+                break;
         }
         
         return { 
             status: availability, 
             message: message,
-            progress: downloadProgress
+            progress: downloadProgress,
+            offline: mode === 'offline',
+            mode: mode
         };
     } catch (error) {
-        return { status: 'unavailable', message: 'Error Checking Status' };
+        return { 
+            status: 'unavailable', 
+            message: 'Error Checking Status',
+            offline: true,
+            mode: 'offline'
+        };
     }
 }
+
 (async function init() {
     console.log("Refyne content script initializing...");
     console.log("Rewriter API available:", isChromeAIAvailable());
@@ -359,10 +544,15 @@ async function getAIStatus() {
     } catch (err) {
         isEnabled = true;
     }
+    const offlineInitialized = initializeOfflineChecker();
+    console.log("Offline checker initialized:", offlineInitialized);
     
-    const initialized = await initializeRewriter();
-    if (initialized) {
+    const aiInitialized = await initializeRewriter();
+    
+    if (aiInitialized || offlineInitialized) {
         console.log("Refyne initialized successfully!");
+        console.log("AI Mode:", aiInitialized ? "Active" : "Unavailable");
+        console.log("Offline Mode:", offlineMode ? "Active" : "Inactive");
         
         document.addEventListener("input", handleInput, true);
         document.addEventListener("click", (e) => { 
@@ -370,7 +560,9 @@ async function getAIStatus() {
         }, true);
         document.addEventListener("scroll", hideTooltip, true);
     } else {
-        console.log("Refyne initialization failed");
+        console.log("Refyne initialization failed completely");
+        showStatusMessage("Refyne failed to initialize", "error");
+        setTimeout(hideStatusMessage, 3000);
     }
 })();
 
@@ -391,8 +583,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         showStatusMessage("Checking selected text...", "info");
         getSuggestions(request.text).then(suggestion => {
             if (suggestion) {
+                const source = suggestion.source || (offlineMode ? "offline" : "ai");
+                const titleColor = source === "offline" ? "#FF9800" : "#4caf50";
+                const titleText = source === "offline" ? "Refyne Offline Suggestion" : "Refyne AI Suggestion";
+                
                 showTooltip(
-                    `<div style="font-weight:bold;color:#4caf50;margin-bottom:8px;">Suggestion:</div>
+                    `<div style="font-weight:bold;color:${titleColor};margin-bottom:8px;">${titleText}</div>
                      <div>${suggestion.corrected}</div>`,
                     window.innerWidth / 2,
                     window.innerHeight / 2,
@@ -400,7 +596,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         showStatusMessage("Copy the suggestion manually", "info");
                         setTimeout(hideStatusMessage, 3000);
                         hideTooltip();
-                    }
+                    },
+                    source
                 );
             } else {
                 showStatusMessage("No suggestions available", "info");

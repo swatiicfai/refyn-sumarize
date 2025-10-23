@@ -9,6 +9,7 @@ chrome.runtime.onInstalled.addListener(() => {
     installDate: Date.now(),
     version: '2.0.2'
   });
+  
   chrome.contextMenus.create({
     id: 'refyne-check',
     title: 'Check with Refyne',
@@ -20,6 +21,7 @@ chrome.runtime.onInstalled.addListener(() => {
       console.log('Context menu created');
     }
   });
+  
   try {
     if (chrome.action && chrome.action.setBadgeText) {
       chrome.action.setBadgeText({ text: 'ON' });
@@ -41,6 +43,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     }).catch(err => console.log('Context menu message failed:', err));
   }
 });
+
 function setupActionListener() {
   if (chrome.action && chrome.action.onClicked) {
     chrome.action.onClicked.addListener((tab) => {
@@ -99,6 +102,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         correctionsCount: newCorrections,
         wordsImproved: newWords
       });
+      
       try {
         if (chrome.action && chrome.action.setBadgeText) {
           chrome.action.setBadgeText({ 
@@ -112,6 +116,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       } catch (error) {
         console.log('Badge update failed:', error);
       }
+      
+      console.log(`Correction applied (${request.source || 'ai'}):`, {
+        original: request.original,
+        corrected: request.corrected
+      });
     });
 
     sendResponse({ success: true });

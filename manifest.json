@@ -1,21 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Refyne - AI Writing Assistant",
+  "name": "Refyne",
   "version": "2.0.2",
-  "description": "Privacy-first AI writing assistant using Chrome's Built-in AI",
+  "description": "AI-powered writing assistant with offline support",
   "permissions": [
-    "activeTab",
     "storage",
+    "activeTab",
     "contextMenus"
   ],
-  "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icons/pen.png",
-      "48": "icons/pen.png",
-      "128": "icons/pen.png"
-    }
-  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -23,22 +18,27 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_end",
-      "all_frames": false
+      "run_at": "document_end"
     }
   ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Refyne",
+    "default_icon": {
+      "16": "icons/pen.png",
+      "32": "icons/pen.png",
+      "48": "icons/pen.png",
+      "128": "icons/pen.png"
+    }
+  },
   "icons": {
     "16": "icons/pen.png",
+    "32": "icons/pen.png",
     "48": "icons/pen.png",
     "128": "icons/pen.png"
   },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["icons/*"],
-      "matches": ["<all_urls>"]
-    }
-  ]
+  "web_accessible_resources": [{
+    "resources": ["models/*", "libs/*"],
+    "matches": ["<all_urls>"]
+  }]
 }
