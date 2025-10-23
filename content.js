@@ -393,15 +393,23 @@ async function getSuggestions(text) {
     return null;
 }
 
-function showTooltip(html, x, y, applyCallback, source = "ai", suggestionText = "") {
+async function showTooltip(html, x, y, applyCallback, source = "ai", suggestionText = "") {
     const sourceIndicator = source === "offline" 
         ? '<div style="font-size:10px;color:#888;text-align:right;margin-top:8px;">🔒 Offline Mode</div>'
         : '<div style="font-size:10px;color:#888;text-align:right;margin-top:8px;">🤖 AI Powered</div>';
     
-    const listenButton = suggestionText ? 
-        `<button id="listenSuggestion" style="margin-top: 8px; padding: 6px 12px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;">
-             Listen
-         </button>` : '';
+    let listenButton = '';
+    if (suggestionText) {
+        const settings = await new Promise(resolve => {
+            chrome.storage.sync.get(['enableTTS'], resolve);
+        });
+        
+        if (settings.enableTTS !== false) {
+            listenButton = `<button id="listenSuggestion" style="margin-top: 8px; padding: 6px 12px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;">
+               Listen
+            </button>`;
+        }
+    }
     
     tooltip.innerHTML = html + listenButton + sourceIndicator;
     
@@ -418,7 +426,7 @@ function showTooltip(html, x, y, applyCallback, source = "ai", suggestionText = 
     tooltip.style.top = finalY + "px";
     tooltip.style.display = "block";
 
-    if (suggestionText) {
+    if (suggestionText && listenButton) {
         const listenBtn = tooltip.querySelector('#listenSuggestion');
         if (listenBtn) {
             listenBtn.addEventListener('click', (e) => {
