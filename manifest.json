@@ -1,15 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Refyne",
-  "version": "1.0",
-  "description": "AI-powered writing assistant using local Ollama",
+  "name": "Refyne - AI Writing Assistant",
+  "version": "2.0.2",
+  "description": "Privacy-first AI writing assistant using Chrome's Built-in AI",
   "permissions": [
     "activeTab",
+    "storage",
     "contextMenus"
-  ],
-  "host_permissions": [
-    "http://localhost:3000/*",
-    "<all_urls>"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -19,16 +16,29 @@
       "128": "icons/pen.png"
     }
   },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": false
     }
   ],
   "icons": {
     "16": "icons/pen.png",
     "48": "icons/pen.png",
     "128": "icons/pen.png"
-  }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
