@@ -186,6 +186,47 @@ async function monitorDownloadProgress() {
     }
 }
 
+async function speakSuggestion(text) {
+    const settings = await new Promise(resolve => {
+        chrome.storage.sync.get(['enableTTS'], resolve);
+    });
+    
+    if (settings.enableTTS === false) return;
+    
+    if ('speechSynthesis' in window) {
+        speechSynthesis.cancel();
+        
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 0.9;
+        utterance.pitch = 1.0;
+        utterance.volume = 0.8;
+        
+        utterance.onstart = () => {
+            console.log("Started speaking suggestion");
+        };
+        
+        utterance.onend = () => {
+            console.log("Finished speaking suggestion");
+        };
+        
+        utterance.onerror = (event) => {
+            console.error("Speech synthesis error:", event);
+            showStatusMessage("Text-to-speech failed", "error");
+            setTimeout(hideStatusMessage, 2000);
+        };
+        
+        speechSynthesis.speak(utterance);
+    } else {
+        showStatusMessage("Text-to-speech not supported", "error");
+        setTimeout(hideStatusMessage, 2000);
+    }
+}
+
+function stopSpeaking() {
+    if ('speechSynthesis' in window) {
+        speechSynthesis.cancel();
+    }
+}
 async function initializeRewriter() {
     if (!isChromeAIAvailable()) {
         console.log("Rewriter API not available in this browser");
@@ -352,12 +393,17 @@ async function getSuggestions(text) {
     return null;
 }
 
-function showTooltip(html, x, y, applyCallback, source = "ai") {
+function showTooltip(html, x, y, applyCallback, source = "ai", suggestionText = "") {
     const sourceIndicator = source === "offline" 
         ? '<div style="font-size:10px;color:#888;text-align:right;margin-top:8px;">🔒 Offline Mode</div>'
         : '<div style="font-size:10px;color:#888;text-align:right;margin-top:8px;">🤖 AI Powered</div>';
     
-    tooltip.innerHTML = html + sourceIndicator;
+    const listenButton = suggestionText ? 
+        `<button id="listenSuggestion" style="margin-top: 8px; padding: 6px 12px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;">
+             Listen
+         </button>` : '';
+    
+    tooltip.innerHTML = html + listenButton + sourceIndicator;
     
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
@@ -372,10 +418,22 @@ function showTooltip(html, x, y, applyCallback, source = "ai") {
     tooltip.style.top = finalY + "px";
     tooltip.style.display = "block";
 
+    if (suggestionText) {
+        const listenBtn = tooltip.querySelector('#listenSuggestion');
+        if (listenBtn) {
+            listenBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                speakSuggestion(suggestionText);
+            });
+        }
+    }
+
     tooltip.onclick = (e) => {
-        e.stopPropagation();
-        applyCallback();
-        hideTooltip();
+        if (!e.target.closest('#listenSuggestion')) {
+            e.stopPropagation();
+            applyCallback();
+            hideTooltip();
+        }
     };
 }
 
@@ -475,7 +533,8 @@ async function handleInput(e) {
                 activeTarget = null;
                 activeSuggestion = null;
             },
-            source
+            source,
+            suggestion.corrected 
         );
     }, 2000);
 }
@@ -569,7 +628,10 @@ async function getAIStatus() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'enabledStateChanged') {
         isEnabled = request.enabled;
-        if (!isEnabled) hideTooltip();
+        if (!isEnabled) {
+            hideTooltip();
+            stopSpeaking(); 
+        }
         showStatusMessage(isEnabled ? "Refyne enabled" : "Refyne disabled", isEnabled ? "success" : "warning");
         setTimeout(hideStatusMessage, 2000);
     }
@@ -597,7 +659,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         setTimeout(hideStatusMessage, 3000);
                         hideTooltip();
                     },
-                    source
+                    source,
+                    suggestion.corrected 
                 );
             } else {
                 showStatusMessage("No suggestions available", "info");
