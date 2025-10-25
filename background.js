@@ -9,7 +9,6 @@ chrome.runtime.onInstalled.addListener(() => {
     installDate: Date.now(),
     version: '2.0.2'
   });
-  
   chrome.contextMenus.create({
     id: 'refyne-check',
     title: 'Check with Refyne',
@@ -19,6 +18,18 @@ chrome.runtime.onInstalled.addListener(() => {
       console.log('Context menu error:', chrome.runtime.lastError);
     } else {
       console.log('Context menu created');
+    }
+  });
+  
+  chrome.contextMenus.create({
+    id: 'refyne-insights',
+    title: 'Get writing insights',
+    contexts: ['selection']
+  }, () => {
+    if (chrome.runtime.lastError) {
+      console.log('Insights context menu error:', chrome.runtime.lastError);
+    } else {
+      console.log('Insights context menu created');
     }
   });
   
@@ -41,6 +52,13 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       action: 'checkText',
       text: info.selectionText
     }).catch(err => console.log('Context menu message failed:', err));
+  }
+  
+  if (info.menuItemId === 'refyne-insights' && info.selectionText) {
+    chrome.tabs.sendMessage(tab.id, {
+      action: 'showTextInsights',
+      text: info.selectionText
+    }).catch(err => console.log('Insights context menu failed:', err));
   }
 });
 
