@@ -17,7 +17,12 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": [
+        "components/text-analyzer.js",
+        "components/ai-engine.js",
+        "components/tooltip-manager.js",
+        "content.js"
+      ],
       "run_at": "document_end"
     }
   ],
