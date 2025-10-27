@@ -2,6 +2,8 @@
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refyne AI Assistant</title>
     <style>
         body {
             width: 340px;
@@ -63,6 +65,9 @@
             text-align: center;
             border: 2px solid;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .status.ready {
@@ -310,6 +315,7 @@
             margin-bottom: 16px;
             border: 2px solid #E0E7FF;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            display: none; /* Initially hidden */
         }
 
         .summary-box {
@@ -343,6 +349,7 @@
         .sources-box a {
             color: #8B5CF6;
             text-decoration: none;
+            word-break: break-all;
         }
         
         .sources-box a:hover {
@@ -357,6 +364,8 @@
         
         .text-green { color: #059669; }
         .text-yellow { color: #D97706; }
+        .text-red { color: #EF4444; }
+        
         .spinner {
             border: 2px solid rgba(255, 255, 255, 0.3);
             border-top: 2px solid white;
@@ -390,6 +399,7 @@
         <div class="header">
             <h1>Refyne</h1>
             <div id="modeIndicator" class="mode-indicator">
+                <!-- Icon for status, reused from the input HTML -->
                 <svg class="svg-icon" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
                 </svg>
@@ -404,7 +414,7 @@
             <span id="statusMessage">Checking AI status...</span>
         </div>
         
-        <!-- API Key Management Section (New) -->
+        <!-- API Key Management Section -->
         <div id="apiKeySection">
             <label for="apiKey">Gemini API Key</label>
             <div class="api-input-group">
@@ -414,7 +424,7 @@
             <p id="key-message" class="text-yellow">Key not set.</p>
         </div>
         
-        <!-- Summarize and Speak Buttons (New) -->
+        <!-- Summarize and Speak Buttons -->
         <button id="summarizeBtn" class="action-button" disabled>
             <svg class="action-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
                 <path fill-rule="evenodd" d="M7.5 6a4.5 4.5 0 1 1 9 0 4.5 4.5 0 0 1-9 0ZM3.751 20.105a8.25 8.25 0 0 1 16.498 0 .75.75 0 0 1-.437.695A18.683 18.683 0 0 1 12 22.5c-2.73 0-5.46-.61-7.812-1.7a.75.75 0 0 1-.437-.695Z" clip-rule="evenodd" />
@@ -431,8 +441,8 @@
             Speak Summary
         </button>
         
-        <!-- Summary Output Section (New) -->
-        <div id="resultsSection" class="hidden">
+        <!-- Summary Output Section -->
+        <div id="resultsSection">
             <div class="summary-box">
                 <h3>Summary</h3>
                 <div id="summaryOutput"></div>
@@ -483,6 +493,537 @@
             Powered by AI • v1.0.0
         </div>
     </div>
-    <script src="popup.js"></script>
+    <script>
+        // --- MANDATORY GLOBALS SETUP ---
+        // These are required for the execution environment but not directly used for this LLM tool.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        // __initial_auth_token is not used since we don't rely on Firestore/Auth here.
+
+        // --- API AND CONSTANTS ---
+        const GEMINI_API_MODEL = 'gemini-2.5-flash-preview-09-2025';
+        const TTS_API_MODEL = 'gemini-2.5-flash-preview-tts';
+        const API_KEY_STORAGE_KEY = 'refyne_gemini_api_key';
+        const SETTINGS_STORAGE_KEY = 'refyne_settings';
+        let GEMINI_API_KEY = "";
+
+        // --- UI ELEMENT CACHE ---
+        const ui = {
+            modeIndicator: document.getElementById('modeIndicator'),
+            modeStatusText: document.getElementById('modeStatusText'),
+            status: document.getElementById('status'),
+            statusMessage: document.getElementById('statusMessage'),
+            apiKeyInput: document.getElementById('apiKey'),
+            saveKeyBtn: document.getElementById('saveKey'),
+            keyMessage: document.getElementById('key-message'),
+            summarizeBtn: document.getElementById('summarizeBtn'),
+            speakBtn: document.getElementById('speakBtn'),
+            resultsSection: document.getElementById('resultsSection'),
+            summaryOutput: document.getElementById('summaryOutput'),
+            sourcesOutput: document.getElementById('sourcesOutput'),
+            toggleEnabled: document.getElementById('toggleEnabled'),
+            toggleTTS: document.getElementById('toggleTTS'),
+        };
+
+        // --- STATE ---
+        let summaryText = "";
+        let audioPlayer = null;
+        let isPlaying = false;
+        let isSummarizing = false;
+        let settings = {
+            isEnabled: true,
+            isTTS: false,
+        };
+
+        // --- AUDIO UTILITIES (FOR TTS) ---
+
+        /**
+         * Converts a Base64 string to an ArrayBuffer.
+         * @param {string} base64
+         * @returns {ArrayBuffer}
+         */
+        function base64ToArrayBuffer(base64) {
+            const binaryString = atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        /**
+         * Converts 16-bit PCM audio data to a WAV Blob.
+         * @param {Int16Array} pcm16 - Signed 16-bit PCM data.
+         * @param {number} sampleRate - The sample rate (e.g., 24000).
+         * @returns {Blob}
+         */
+        function pcmToWav(pcm16, sampleRate) {
+            const numChannels = 1;
+            const bytesPerSample = 2; // 16-bit PCM
+            const blockAlign = numChannels * bytesPerSample;
+            const byteRate = sampleRate * blockAlign;
+            const dataLength = pcm16.length * bytesPerSample;
+            const buffer = new ArrayBuffer(44 + dataLength);
+            const view = new DataView(buffer);
+
+            let offset = 0;
+
+            // RIFF chunk
+            view.setUint32(offset, 0x52494646, false); // "RIFF"
+            offset += 4;
+            view.setUint32(offset, 36 + dataLength, true); // ChunkSize
+            offset += 4;
+            view.setUint32(offset, 0x57415645, false); // "WAVE"
+            offset += 4;
+
+            // fmt sub-chunk
+            view.setUint32(offset, 0x666d7420, false); // "fmt "
+            offset += 4;
+            view.setUint32(offset, 16, true); // Subchunk1Size (16 for PCM)
+            offset += 4;
+            view.setUint16(offset, 1, true); // AudioFormat (1 for PCM)
+            offset += 2;
+            view.setUint16(offset, numChannels, true); // NumChannels
+            offset += 2;
+            view.setUint32(offset, sampleRate, true); // SampleRate
+            offset += 4;
+            view.setUint32(offset, byteRate, true); // ByteRate
+            offset += 4;
+            view.setUint16(offset, blockAlign, true); // BlockAlign
+            offset += 2;
+            view.setUint16(offset, bytesPerSample * 8, true); // BitsPerSample
+            offset += 2;
+
+            // data sub-chunk
+            view.setUint32(offset, 0x64617461, false); // "data"
+            offset += 4;
+            view.setUint32(offset, dataLength, true); // Subchunk2Size
+            offset += 4;
+
+            // Write PCM data
+            for (let i = 0; i < pcm16.length; i++) {
+                view.setInt16(offset, pcm16[i], true); // Write 16-bit sample (Little Endian)
+                offset += 2;
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
+
+        // --- UI & STATE MANAGEMENT ---
+
+        /**
+         * Updates the status block in the UI.
+         * @param {string} type - 'ready', 'downloading', or 'error'.
+         * @param {string} message - The message to display.
+         * @param {boolean} showSpinner - Whether to show a loading spinner.
+         */
+        function updateStatus(type, message, showSpinner = false) {
+            ui.status.className = `status ${type}`;
+            ui.statusMessage.innerHTML = message;
+
+            // Update mode indicator based on API key presence
+            if (GEMINI_API_KEY.length > 0) {
+                ui.modeIndicator.classList.add('online');
+                ui.modeStatusText.textContent = 'Online';
+                ui.summarizeBtn.disabled = !settings.isEnabled || showSpinner;
+            } else {
+                ui.modeIndicator.classList.remove('online');
+                ui.modeStatusText.textContent = 'Offline';
+                ui.summarizeBtn.disabled = true;
+            }
+
+            // Handle spinner for summarize button
+            const icon = ui.summarizeBtn.querySelector('.action-icon');
+            const spinner = ui.summarizeBtn.querySelector('.spinner');
+
+            if (showSpinner) {
+                if (!spinner) {
+                    const newSpinner = document.createElement('div');
+                    newSpinner.classList.add('spinner');
+                    ui.summarizeBtn.prepend(newSpinner);
+                }
+                if (icon) icon.style.display = 'none';
+                ui.summarizeBtn.childNodes[ui.summarizeBtn.childNodes.length - 1].textContent = ' Processing...';
+            } else {
+                if (spinner) spinner.remove();
+                if (icon) icon.style.display = 'inline-block';
+                ui.summarizeBtn.childNodes[ui.summarizeBtn.childNodes.length - 1].textContent = ' Summarize Page';
+            }
+        }
+
+        /**
+         * Updates the message related to the API Key status.
+         */
+        function updateKeyMessage() {
+            if (GEMINI_API_KEY && GEMINI_API_KEY.length > 0) {
+                ui.keyMessage.className = 'text-green';
+                ui.keyMessage.textContent = 'Key saved. AI functions enabled.';
+                updateStatus('ready', 'Ready to Refyne!', false);
+            } else {
+                ui.keyMessage.className = 'text-yellow';
+                ui.keyMessage.textContent = 'Key not set. Online features unavailable.';
+                updateStatus('error', 'API Key missing.', false);
+            }
+            ui.apiKeyInput.value = ''; // Clear input after save/load
+        }
+        
+        /**
+         * Loads settings and API key from localStorage and updates the UI.
+         */
+        function loadSettings() {
+            const savedKey = localStorage.getItem(API_KEY_STORAGE_KEY) || "";
+            GEMINI_API_KEY = savedKey;
+
+            const savedSettings = localStorage.getItem(SETTINGS_STORAGE_KEY);
+            if (savedSettings) {
+                settings = JSON.parse(savedSettings);
+                ui.toggleEnabled.checked = settings.isEnabled;
+                ui.toggleTTS.checked = settings.isTTS;
+            }
+            
+            updateKeyMessage();
+            
+            // Initial button state based on settings
+            ui.summarizeBtn.disabled = !settings.isEnabled || GEMINI_API_KEY.length === 0;
+            ui.speakBtn.disabled = true;
+        }
+
+        /**
+         * Saves the API Key from the input field to localStorage.
+         */
+        function saveApiKey() {
+            const newKey = ui.apiKeyInput.value.trim();
+            if (newKey.length > 0) {
+                GEMINI_API_KEY = newKey;
+                localStorage.setItem(API_KEY_STORAGE_KEY, newKey);
+                ui.saveKeyBtn.textContent = 'Saved';
+                setTimeout(() => ui.saveKeyBtn.textContent = 'Save', 1000);
+            } else {
+                GEMINI_API_KEY = "";
+                localStorage.removeItem(API_KEY_STORAGE_KEY);
+                ui.saveKeyBtn.textContent = 'Cleared';
+                setTimeout(() => ui.saveKeyBtn.textContent = 'Save', 1000);
+            }
+            updateKeyMessage();
+        }
+
+        /**
+         * Saves a specific setting key-value pair.
+         * @param {string} key
+         * @param {boolean} value
+         */
+        function saveSetting(key, value) {
+            settings[key] = value;
+            localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+        }
+
+
+        // --- CORE LLM FUNCTIONS ---
+
+        /**
+         * Simulates fetching page content (in a real extension, this contacts the content script).
+         * @returns {Promise<string>}
+         */
+        function simulatePageContentFetch() {
+            // Mock content for demonstration. In a real extension, this would scrape the active tab.
+            const mockPageContent = `
+                The Gemini model family has set a new standard for AI capability, achieving state-of-the-art performance across various modalities, including text, image, video, and audio. Google has recently introduced the 'nano-banana' model (Gemini 2.5 Flash Image Preview) for fast, high-quality image editing and generation. This new model is optimized for real-time applications and is highly competitive with other large language and image generation models. The primary features of the Flash Image Preview model are its speed and its ability to handle complex, multi-turn editing instructions. Another major update includes the Gemini 2.5 Pro model, which excels in complex reasoning and detailed document analysis. For developers, the API provides powerful tools, including structured JSON output and Google Search grounding, which is crucial for delivering accurate, up-to-date information in applications like browser extensions. The platform also features advanced Text-to-Speech (TTS) capabilities using models like 'gemini-2.5-flash-preview-tts', which returns raw PCM audio data that must be converted to a playable format like WAV.
+            `;
+            return new Promise(resolve => setTimeout(() => resolve(mockPageContent.trim()), 500));
+        }
+
+        /**
+         * Calls the Gemini API for summarization.
+         * @param {string} userQuery
+         * @param {boolean} isGrounded
+         * @param {number} retryCount
+         * @returns {Promise<{text: string, sources: Array<{uri: string, title: string}>}>}
+         */
+        async function callGeminiAPI(userQuery, isGrounded = true, retryCount = 0) {
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_API_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+            const maxRetries = 3;
+            const systemPrompt = "You are a concise summarization expert. Analyze the provided web page content and create a brief (3-4 sentence) summary highlighting the most critical information, key names, and important concepts. Do not use markdown headers or bullet points.";
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            if (isGrounded) {
+                payload.tools = [{ "google_search": {} }];
+            }
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (response.status === 429 && retryCount < maxRetries) {
+                    const delay = Math.pow(2, retryCount) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return callGeminiAPI(userQuery, isGrounded, retryCount + 1);
+                }
+
+                if (!response.ok) {
+                    throw new Error(`API call failed: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                const candidate = result.candidates?.[0];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const text = candidate.content.parts[0].text;
+                    let sources = [];
+
+                    const groundingMetadata = candidate.groundingMetadata;
+                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                        sources = groundingMetadata.groundingAttributions
+                            .map(attribution => ({
+                                uri: attribution.web?.uri,
+                                title: attribution.web?.title,
+                            }))
+                            .filter(source => source.uri && source.title);
+                    }
+
+                    return { text, sources };
+
+                } else {
+                    throw new Error("Invalid API response structure or no text generated.");
+                }
+
+            } catch (error) {
+                throw new Error(`Error during summarization: ${error.message}`);
+            }
+        }
+
+
+        /**
+         * Calls the Gemini TTS API to generate and play audio.
+         * @param {string} text - The text to speak.
+         * @param {number} retryCount
+         */
+        async function callTTSAPI(text, retryCount = 0) {
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TTS_API_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+            const maxRetries = 3;
+
+            // Use a clear and pleasant voice (Kore)
+            const payload = {
+                contents: [{ parts: [{ text: text }] }],
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: { voiceName: "Kore" }
+                        }
+                    }
+                },
+            };
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (response.status === 429 && retryCount < maxRetries) {
+                    const delay = Math.pow(2, retryCount) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return callTTSAPI(text, retryCount + 1);
+                }
+
+                if (!response.ok) {
+                    throw new Error(`TTS API call failed: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                const part = result?.candidates?.[0]?.content?.parts?.[0];
+                const audioData = part?.inlineData?.data;
+                const mimeType = part?.inlineData?.mimeType;
+
+                if (audioData && mimeType && mimeType.startsWith("audio/L16")) {
+                    // Extract sample rate from mimeType (e.g., audio/L16;rate=24000)
+                    const rateMatch = mimeType.match(/rate=(\d+)/);
+                    if (!rateMatch) throw new Error("Could not determine sample rate from MIME type.");
+                    const sampleRate = parseInt(rateMatch[1], 10);
+
+                    const pcmData = base64ToArrayBuffer(audioData);
+                    // API returns signed PCM16 audio data.
+                    const pcm16 = new Int16Array(pcmData);
+                    const wavBlob = pcmToWav(pcm16, sampleRate);
+                    const audioUrl = URL.createObjectURL(wavBlob);
+
+                    return audioUrl;
+                } else {
+                    throw new Error("Invalid TTS API response or missing audio data.");
+                }
+
+            } catch (error) {
+                throw new Error(`Error during TTS generation: ${error.message}`);
+            }
+        }
+
+        // --- EVENT HANDLERS ---
+
+        async function handleSummarize() {
+            if (isSummarizing || GEMINI_API_KEY.length === 0 || !settings.isEnabled) return;
+            isSummarizing = true;
+            summaryText = "";
+            
+            // Reset UI
+            ui.resultsSection.style.display = 'block';
+            ui.summaryOutput.innerHTML = 'Generating summary...';
+            ui.sourcesOutput.innerHTML = 'Fetching sources...';
+            ui.speakBtn.disabled = true;
+            updateStatus('downloading', 'Fetching page content...', true);
+
+            try {
+                const pageContent = await simulatePageContentFetch();
+
+                if (pageContent.length === 0) {
+                    updateStatus('error', 'No readable content found on page.');
+                    ui.summaryOutput.innerHTML = 'No content to summarize.';
+                    ui.sourcesOutput.innerHTML = '---';
+                    return;
+                }
+
+                updateStatus('downloading', 'Sending content to Gemini for summarization...', true);
+
+                const query = `Summarize the following web page content: ${pageContent}`;
+                const { text, sources } = await callGeminiAPI(query, true);
+
+                summaryText = text;
+                ui.summaryOutput.innerHTML = text;
+
+                // Display Sources
+                if (sources.length > 0) {
+                    ui.sourcesOutput.innerHTML = sources.map((s, i) =>
+                        `<a href="${s.uri}" target="_blank" title="${s.uri}">${s.title} (${i + 1})</a>`
+                    ).join('<br>');
+                } else {
+                    ui.sourcesOutput.innerHTML = 'No external web sources were used for grounding.';
+                }
+
+                updateStatus('ready', 'Summary is ready!');
+                ui.speakBtn.disabled = !settings.isTTS; // Enable speak only if TTS is toggled on
+
+            } catch (error) {
+                console.error("Summarization Error:", error);
+                summaryText = "Could not generate summary due to an API or network error.";
+                ui.summaryOutput.innerHTML = summaryText;
+                ui.sourcesOutput.innerHTML = `<span class="text-red">Error: ${error.message}</span>`;
+                updateStatus('error', 'Summarization failed!');
+            } finally {
+                isSummarizing = false;
+            }
+        }
+
+        async function handleSpeak() {
+            if (summaryText.length === 0) {
+                ui.summaryOutput.innerHTML = '<span class="text-red">Please summarize the page first!</span>';
+                return;
+            }
+
+            if (isPlaying) {
+                // Stop playback
+                if (audioPlayer) {
+                    audioPlayer.pause();
+                    audioPlayer.currentTime = 0;
+                    URL.revokeObjectURL(audioPlayer.src);
+                    audioPlayer = null;
+                }
+                isPlaying = false;
+                ui.speakBtn.classList.remove('playing');
+                ui.speakBtn.innerHTML = `
+                    <svg class="action-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M18.75 12a.75.75 0 0 0-.75-.75H5.877c-.504 0-.84.5-.596.936l.723 1.267c.23.402.66.604 1.085.604h11.233a.75.75 0 0 0 .75-.75Zm0 0-2.85 2.85M18.75 12 15.9 9.15" />
+                        <path d="M22.5 12a10.5 10.5 0 1 1-21 0 10.5 10.5 0 0 1 21 0Z" />
+                    </svg>
+                    Speak Summary
+                `;
+                return;
+            }
+
+            // Start playback/generation
+            isPlaying = true;
+            ui.speakBtn.disabled = true;
+            ui.speakBtn.classList.add('playing');
+            ui.speakBtn.innerHTML = `<div class="spinner"></div> Generating Audio...`;
+
+            try {
+                const audioUrl = await callTTSAPI(summaryText);
+                
+                audioPlayer = new Audio(audioUrl);
+                
+                audioPlayer.onended = () => {
+                    // Revert button state when audio finishes
+                    handleSpeak(); 
+                };
+                
+                audioPlayer.play();
+                
+                // Update button state to playing/stop
+                ui.speakBtn.disabled = false;
+                ui.speakBtn.innerHTML = `
+                    <svg class="action-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                        <path fill-rule="evenodd" d="M4.5 7.875a1.125 1.125 0 0 0-2.25 0v8.25a1.125 1.125 0 0 0 2.25 0V7.875Zm7.5 0a1.125 1.125 0 0 0-2.25 0v8.25a1.125 1.125 0 0 0 2.25 0V7.875Zm7.5 0a1.125 1.125 0 0 0-2.25 0v8.25a1.125 1.125 0 0 0 2.25 0V7.875Z" clip-rule="evenodd" />
+                    </svg>
+                    Stop Playing
+                `;
+
+            } catch (error) {
+                console.error("TTS Error:", error);
+                // Revert to initial state on error
+                isPlaying = false;
+                ui.speakBtn.classList.remove('playing');
+                ui.speakBtn.disabled = false;
+                ui.speakBtn.innerHTML = `
+                    <svg class="action-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M18.75 12a.75.75 0 0 0-.75-.75H5.877c-.504 0-.84.5-.596.936l.723 1.267c.23.402.66.604 1.085.604h11.233a.75.75 0 0 0 .75-.75Zm0 0-2.85 2.85M18.75 12 15.9 9.15" />
+                        <path d="M22.5 12a10.5 10.5 0 1 1-21 0 10.5 10.5 0 0 1 21 0Z" />
+                    </svg>
+                    Speak Summary
+                `;
+                updateStatus('error', 'TTS failed. Audio generation error.');
+                ui.summaryOutput.innerHTML = `<span class="text-red">TTS failed: ${error.message}</span>`;
+            }
+        }
+        
+        function handleToggleEnabled() {
+            const isEnabled = ui.toggleEnabled.checked;
+            saveSetting('isEnabled', isEnabled);
+            ui.summarizeBtn.disabled = !isEnabled || GEMINI_API_KEY.length === 0;
+            updateStatus(isEnabled ? 'ready' : 'error', isEnabled ? 'Ready to Refyne!' : 'Extension disabled by toggle.');
+        }
+
+        function handleToggleTTS() {
+            const isTTS = ui.toggleTTS.checked;
+            saveSetting('isTTS', isTTS);
+            
+            // Only enable the speak button if a summary exists AND TTS is enabled
+            ui.speakBtn.disabled = !isTTS || summaryText.length === 0;
+        }
+
+        // --- INITIALIZATION ---
+        document.addEventListener('DOMContentLoaded', () => {
+            loadSettings();
+
+            // Set up event listeners
+            ui.saveKeyBtn.addEventListener('click', saveApiKey);
+            ui.summarizeBtn.addEventListener('click', handleSummarize);
+            ui.speakBtn.addEventListener('click', handleSpeak);
+            ui.toggleEnabled.addEventListener('change', handleToggleEnabled);
+            ui.toggleTTS.addEventListener('change', handleToggleTTS);
+            
+            // Set initial state for stats (mocked as they would be tracked in a background script)
+            document.getElementById('correctionsCount').textContent = Math.floor(Math.random() * 50);
+            document.getElementById('wordsImproved').textContent = Math.floor(Math.random() * 200);
+        });
+
+    </script>
 </body>
 </html>
