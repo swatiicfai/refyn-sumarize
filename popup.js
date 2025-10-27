@@ -10,14 +10,30 @@ document.addEventListener("DOMContentLoaded", async function () {
     const summarizeButton = document.getElementById("summarizePageButton");
     const summaryOutput = document.getElementById("summaryOutput");
 
+    // Elements for API Key handling
+    const apiKeyInput = document.getElementById("geminiApiKeyInput"); // Assuming this ID
+    const saveApiKeyButton = document.getElementById("saveApiKeyButton"); // Assuming this ID
+    const keyStatus = document.getElementById("keyStatus"); // Assuming the 'Key not set.' element has this ID
+
     // --- Initial Load from Storage ---
 
     chrome.storage.local.get(
-        ["enabled", "correctionsCount", "wordsImproved"],
+        ["enabled", "correctionsCount", "wordsImproved", "geminiApiKey"], // Added geminiApiKey
         (result) => {
             toggle.checked = result.enabled !== false;
             correctionsCount.textContent = result.correctionsCount || 0;
             wordsImproved.textContent = result.wordsImproved || 0;
+            
+            // Populate API Key field if already set
+            if (apiKeyInput && result.geminiApiKey) {
+                apiKeyInput.value = result.geminiApiKey;
+                // Mask the key on load for security, showing only the length
+                apiKeyInput.type = 'password'; 
+                keyStatus.textContent = "Key is set.";
+            } else if (keyStatus) {
+                keyStatus.textContent = "Key not set.";
+            }
+
             updateExtensionBadge(toggle.checked);
         }
     );
@@ -25,7 +41,31 @@ document.addEventListener("DOMContentLoaded", async function () {
         toggleTTS.checked = result.enableTTS !== false;
     });
 
-    // --- Event Listeners ---
+    // --- API Key Save Handler ---
+    if (saveApiKeyButton && apiKeyInput) {
+        saveApiKeyButton.addEventListener("click", function () {
+            const key = apiKeyInput.value.trim();
+            if (key) {
+                // Save the key using Chrome storage
+                chrome.storage.local.set({ geminiApiKey: key }, () => {
+                    keyStatus.textContent = "Key saved successfully.";
+                    apiKeyInput.type = 'password';
+                    apiKeyInput.value = key; // Keep the key masked
+                    // Re-check AI status after saving the key
+                    checkAIStatus(); 
+                });
+            } else {
+                chrome.storage.local.remove('geminiApiKey', () => {
+                    keyStatus.textContent = "Key cleared.";
+                    apiKeyInput.type = 'text'; // Show placeholder text again
+                    checkAIStatus();
+                });
+            }
+        });
+    }
+
+
+    // --- Other Event Listeners ---
 
     toggleTTS.addEventListener("change", function () {
         chrome.storage.sync.set({ enableTTS: this.checked });
@@ -62,6 +102,15 @@ document.addEventListener("DOMContentLoaded", async function () {
             }
             if (changes.wordsImproved) {
                 wordsImproved.textContent = changes.wordsImproved.newValue || 0;
+            }
+            if (changes.geminiApiKey) {
+                if (changes.geminiApiKey.newValue) {
+                    keyStatus.textContent = "Key is set.";
+                    apiKeyInput.type = 'password';
+                } else {
+                     keyStatus.textContent = "Key not set.";
+                     apiKeyInput.type = 'text';
+                }
             }
         }
     });
@@ -114,30 +163,46 @@ document.addEventListener("DOMContentLoaded", async function () {
 
 
     async function checkAIStatus() {
-        try {
-            const tabs = await chrome.tabs.query({
-                active: true,
-                currentWindow: true,
-            });
-            
-            if (tabs[0] && tabs[0].id) {
-                const response = await chrome.tabs.sendMessage(tabs[0].id, {
-                    action: "getAIStatus",
-                });
-
-                if (response) {
-                    updateStatus(response.status, response.message, response.mode);
-                    return;
-                }
-            }
-        } catch (error) {
-            console.log("Could not get AI status from content script:", error);
-        }
-        const hasAISupport = await checkSystemAISupport();
-        if (hasAISupport) {
-            updateStatus("available", "AI Model Ready", "ai");
+        // First, check if the key is stored locally
+        const keyResult = await new Promise(resolve => {
+            chrome.storage.local.get("geminiApiKey", resolve);
+        });
+        const hasKey = !!keyResult.geminiApiKey;
+        
+        // If the user has explicitly set a key, assume online/AI mode is preferred
+        if (hasKey) {
+            updateStatus("available", "API Key Loaded. AI Ready.", "ai");
+            if (keyStatus) keyStatus.textContent = "Key is set.";
         } else {
-            updateStatus("unavailable", "AI Not Supported - Using Offline Mode", "offline");
+            if (keyStatus) keyStatus.textContent = "Key not set. Using Offline Mode.";
+            
+            // Proceed to check for system support if key is not set
+            try {
+                const tabs = await chrome.tabs.query({
+                    active: true,
+                    currentWindow: true,
+                });
+                
+                if (tabs[0] && tabs[0].id) {
+                    const response = await chrome.tabs.sendMessage(tabs[0].id, {
+                        action: "getAIStatus",
+                    });
+
+                    if (response) {
+                        updateStatus(response.status, response.message, response.mode);
+                        return;
+                    }
+                }
+            } catch (error) {
+                console.log("Could not get AI status from content script:", error);
+            }
+            
+            const hasAISupport = await checkSystemAISupport();
+            if (hasAISupport) {
+                 updateStatus("downloadable", "AI Supported, but Key is missing.", "offline");
+            } else {
+                 updateStatus("unavailable", "AI Not Supported - Using Offline Mode", "offline");
+            }
         }
     }
 
