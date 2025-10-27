@@ -1,415 +1,150 @@
-/**
- * content.js
- * Content script injected into the active web page.
- * Handles communication with popup.js and external AI services.
- * This version supports both real-time text correction and page summarization.
- */
+// --- Configuration ---
+const MIN_CONTENT_LENGTH = 150;
+let isTTS = false; // Flag to track TTS setting
 
-// Global variables for AI interaction
-const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent";
-const MAX_RETRIES = 3;
-const MAX_TEXT_LENGTH = 15000; // API limits and performance considerations
-
-// Global state for extension features (from the Refyne code provided)
-let debounceTimeout = null;
-let activeTarget = null;
-let activeSuggestion = null;
-let isEnabled = true;
-let tooltipManager = null;
-let aiEngine = null;
-let textAnalyzer = null;
-
-// --- 1. Helper Functions for Gemini API Communication with Retry ---
+// --- Utility Functions ---
 
 /**
- * Retrieves the Gemini API key from local storage.
- * NOTE: This function is now primarily used to determine if we should use 
- * the online or the offline summarization mode.
- * @returns {Promise<string|null>} The API key or null if not found.
+ * Strips HTML, reduces whitespace, and cleans up text content from the body.
+ * @param {string} htmlString - The raw innerHTML of the body.
+ * @returns {string} The cleaned, plain text.
  */
-function getApiKey() {
-    return new Promise(resolve => {
-        chrome.storage.local.get("geminiApiKey", (result) => {
-            resolve(result.geminiApiKey || null);
-        });
-    });
-}
-
-/**
- * Implements exponential backoff for API calls.
- * @param {Function} apiCall - The function that returns a Promise for the API call.
- * @param {number} retries - Current number of retries left.
- * @returns {Promise<Response>}
- */
-async function fetchWithRetry(apiCall, retries = MAX_RETRIES) {
-    try {
-        const response = await apiCall();
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response;
-    } catch (error) {
-        if (retries === 0) {
-            throw new Error(`API call failed after ${MAX_RETRIES} retries: ${error.message}`);
-        }
-        const delay = Math.pow(2, MAX_RETRIES - retries) * 1000; // Exponential delay
-        console.warn(`API call failed. Retrying in ${delay / 1000}s... (${retries} retries left)`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return fetchWithRetry(apiCall, retries - 1);
-    }
-}
-
-/**
- * Generates a summary using a simple, local JavaScript heuristic (offline mode).
- * This is the fallback when no API key is set.
- * @param {string} text - The full text to summarize.
- * @returns {string} The generated summary.
- */
-function fallbackSummarizeText(text) {
-    const paragraphs = text.split('\n\n').filter(p => p.trim().length > 100);
-
-    if (paragraphs.length < 3) {
-        // If there are few paragraphs, just return the start of the text.
-        const intro = text.substring(0, Math.min(text.length, 500)).trim();
-        return `**[Offline Summary Mode]** Not enough structured content found. Showing the first few sentences: \n\n${intro}...`;
-    }
-
-    // Heuristic: Use the first two paragraphs and the final paragraph (if different).
-    const summaryParts = [
-        paragraphs[0].trim(),
-        paragraphs[1].trim()
-    ];
-
-    if (paragraphs.length > 2 && paragraphs[paragraphs.length - 1].trim() !== summaryParts[0].trim()) {
-        summaryParts.push(paragraphs[paragraphs.length - 1].trim());
-    }
-
-    // Combine into a simple summary.
-    return `**[Offline Summary Mode - Heuristic]**\n\n${summaryParts.join('\n\n')}\n\n*Note: This summary is generated locally without AI and only extracts key paragraphs.*`;
-}
-
-
-/**
- * Calls the Gemini API to summarize the provided text (Online Mode).
- * If the API key is missing, it runs the fallback summarization.
- * @param {string} text - The text to summarize.
- * @returns {Promise<string>} The generated summary or an error message.
- */
-async function summarizeText(text) {
-    const API_KEY = await getApiKey(); // Retrieve the stored API key
-
-    if (!API_KEY) {
-        // --- OFFLINE FALLBACK ---
-        console.log("Gemini API Key missing. Running offline summarization.");
-        return fallbackSummarizeText(text);
-    }
+function cleanTextContent(htmlString) {
+    // 1. Create a temporary element to strip HTML
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = htmlString;
     
-    // --- ONLINE MODE ---
-    const systemPrompt = "You are a professional summarization assistant. Summarize the following document content concisely and clearly in two to three paragraphs. Focus only on the main topics and conclusions.";
-    const userQuery = `Please summarize this content: \n\n ${text}`;
-
-    const payload = {
-        contents: [{ parts: [{ text: userQuery }] }],
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-    };
-
-    const apiCall = () => fetch(API_URL + `?key=${API_KEY}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+    // Remove scripts, styles, and other non-content elements
+    ['script', 'style', 'iframe', 'noscript', 'header', 'footer', 'nav', '.sidebar'].forEach(selector => {
+        tempDiv.querySelectorAll(selector).forEach(el => el.remove());
     });
 
-    try {
-        const response = await fetchWithRetry(apiCall);
-        const result = await response.json();
-        const generatedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+    // 2. Extract plain text
+    let text = tempDiv.textContent || tempDiv.innerText || '';
 
-        if (generatedText) {
-            return generatedText;
-        } else {
-            console.error("Gemini API response missing generated text:", result);
-            return "AI failed to generate a summary. The input might be too complex or too short or the API key may be invalid. Please check the API key.";
-        }
-    } catch (error) {
-        console.error("Summarization API error:", error);
-        return `Error: AI service error during API call: ${error.message}`;
-    }
+    // 3. Normalize whitespace
+    // Replace multiple newlines/tabs/spaces with a single space
+    text = text.replace(/[\n\t\r]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
+    return text;
 }
 
-// --- 2. Feature-Specific Functions (from the Refyne code provided) ---
-
-function getTextFromElement(el) {
-    if (el.isContentEditable) return el.textContent || el.innerText || "";
-    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") return el.value || "";
-    return "";
-}
-
-function applySuggestion(target, original, corrected) {
-    const currentText = getTextFromElement(target);
-    if (!currentText.includes(original)) return false;
-
-    try {
-        if (target.isContentEditable) {
-            target.textContent = currentText.replace(original, corrected);
-            target.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-            target.value = currentText.replace(original, corrected);
-            const pos = currentText.indexOf(original) + corrected.length;
-            target.setSelectionRange(pos, pos);
-            target.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-
-        chrome.runtime.sendMessage({ 
-            action: 'correctionApplied', 
-            original, 
-            corrected,
-            source: aiEngine.isOfflineMode() ? 'offline' : 'ai'
-        }).catch(err => console.log('Background message failed:', err));
-        
-        tooltipManager.showStatus("Suggestion applied!", "success");
-        setTimeout(() => tooltipManager.hideStatus(), 2000);
-        return true;
-    } catch (error) {
-        console.error("Failed to apply suggestion:", error);
-        tooltipManager.showStatus("Failed to apply suggestion", "error");
-        setTimeout(() => tooltipManager.hideStatus(), 2000);
-        return false;
-    }
-}
-
-async function handleInput(e) {
-    const target = e.target;
-    const isEditable = target.isContentEditable || 
-                        target.tagName === "TEXTAREA" || 
-                        (target.tagName === "INPUT" && ['text','email','search','url','textarea'].includes(target.type));
-
-    if (!isEditable || !isEnabled || !aiEngine || !textAnalyzer) return;
-    
-    tooltipManager.hide();
-    clearTimeout(debounceTimeout);
-    
-    debounceTimeout = setTimeout(async () => {
-        const text = getTextFromElement(target);
-        if (!text || text.trim().length < 3) return;
-
-        // Re-check enabled state (using the same structure as in the Refyne code)
-        try {
-            const response = await new Promise(resolve => {
-                chrome.runtime.sendMessage({ action: 'checkEnabled' }, resolve);
-            });
-            isEnabled = response?.enabled !== false;
-        } catch (err) {
-            isEnabled = true;
-        }
-
-        if (!isEnabled) return;
-
-        const suggestion = await aiEngine.getSuggestions(text);
-        if (!suggestion) return;
-
-        activeTarget = target;
-        activeSuggestion = suggestion;
-
-        const insights = textAnalyzer.analyzeText(text);
-        
-        tooltipManager.showWithInsights(
-            target,
-            suggestion,
-            insights,
-            () => {
-                applySuggestion(target, suggestion.original, suggestion.corrected);
-                activeTarget = null;
-                activeSuggestion = null;
-            }
-        );
-    }, 2000);
-}
-
-
-// --- 3. Page Text Extraction ---
 
 /**
- * Extracts readable, visible text from the page DOM.
- * @returns {string} The concatenated text content.
+ * Performs a basic, extractive summarization by taking the first few sentences.
+ * This is a highly simplified fallback for environments without a robust LLM API.
+ * @param {string} content The clean text content of the page.
+ * @returns {string} The basic summary text.
  */
-function extractPageText() {
-    // Select common text-containing elements
-    const selectors = 'p, h1, h2, h3, h4, h5, li, blockquote, article';
-    const elements = document.querySelectorAll(selectors);
-    let allText = [];
+function fallbackSummarizeText(content) {
+    // Attempt to split the content into sentences (basic rule: split by period followed by space)
+    const sentences = content.match(/[^.!?]+[.!?]/g) || [];
 
-    elements.forEach(el => {
-        const text = el.textContent.trim();
-        // Simple check to ensure element is visible and has significant text
-        if (text.length > 50 && el.offsetHeight > 0) {
-            allText.push(text);
-        }
-    });
-
-    let content = allText.join('\n\n');
-
-    // Truncate content to avoid large API requests
-    if (content.length > MAX_TEXT_LENGTH) {
-        content = content.substring(0, MAX_TEXT_LENGTH);
-        console.log(`Content truncated to ${MAX_TEXT_LENGTH} characters.`);
+    if (sentences.length === 0) {
+        return "The page content is too short or contains no readable sentences to summarize.";
     }
 
-    return content;
+    // Take the first 3 to 5 sentences for a brief summary, or up to 25% of sentences
+    const sentenceCount = Math.min(Math.ceil(sentences.length * 0.25), 5); 
+    const summary = sentences.slice(0, Math.max(3, sentenceCount)).join(' ').trim();
+
+    return summary.length > 0 
+        ? "LOCAL SUMMARY (Extractive): " + summary
+        : "Could not generate a coherent local summary from available text.";
 }
 
-// --- 4. Initialization and Message Handling ---
+// --- Text-to-Speech (TTS) Handler ---
 
-async function init() {
-    console.log("AI Assistant content script initializing...");
-    await new Promise(resolve => setTimeout(resolve, 100)); // Small delay for robustness
-    
-    // NOTE: Requires external libraries TextAnalyzer, AIEngine, and TooltipManager
-    // to be loaded in the page context.
-    try {
-        textAnalyzer = new window.TextAnalyzer();
-        aiEngine = new window.AIEngine();
-        tooltipManager = new window.TooltipManager();
-    } catch (error) {
-        console.error("Failed to initialize required components (TextAnalyzer, AIEngine, TooltipManager). Ensure they are included in manifest 'web_accessible_resources'.", error);
+/**
+ * Reads the given text aloud using the browser's SpeechSynthesis API.
+ * @param {string} text The text to be spoken.
+ */
+function speakText(text) {
+    if (!isTTS) {
+        console.warn("TTS is disabled by the popup toggle.");
         return;
     }
-    
-    // Get initial enabled state
-    try {
-        const response = await new Promise(resolve => {
-            chrome.storage.sync.get(['enableExtension'], resolve);
-        });
-        isEnabled = response?.enableExtension !== false;
-    } catch (err) {
-        console.error("Error checking enabled state:", err);
-        isEnabled = true;
+
+    // Check if the SpeechSynthesis API is supported
+    if ('speechSynthesis' in window) {
+        // Stop any currently speaking utterance
+        window.speechSynthesis.cancel(); 
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        
+        // Optional: Set voice, pitch, and rate for better quality
+        // Note: Voices are browser/system dependent. 'default' is often adequate.
+        utterance.rate = 1.0; 
+        utterance.pitch = 1.0;
+        // utterance.voice = window.speechSynthesis.getVoices().find(voice => voice.name === 'Google US English'); 
+
+        window.speechSynthesis.speak(utterance);
+        console.log("Speaking summary...");
+    } else {
+        console.error("Browser does not support the Web Speech API for Text-to-Speech.");
     }
-    
-    await aiEngine.initialize();
-    
-    console.log("AI Assistant initialized successfully!");
-    console.log("AI Mode:", aiEngine.isAIAvailable() ? "Active" : "Unavailable");
-    console.log("Offline Mode:", aiEngine.isOfflineMode() ? "Active" : "Inactive");
-    
-    function hideTooltipOnClick(e) {
-        if (!tooltipManager.contains(e.target)) {
-            tooltipManager.hide();
-        }
-    }
-    
-    function hideTooltipOnScroll(e) {
-        if (tooltipManager.contains(e.target)) {
-            return;
-        }
-        tooltipManager.hide();
-    }
-    
-    // Clean up existing listeners before re-adding
-    document.removeEventListener("input", handleInput, true);
-    document.removeEventListener("click", hideTooltipOnClick, true);
-    document.removeEventListener("scroll", hideTooltipOnScroll, true);
-    
-    // Attach new listeners for real-time analysis
-    document.addEventListener("input", handleInput, true);
-    document.addEventListener("click", hideTooltipOnClick, true);
-    document.addEventListener("scroll", hideTooltipOnScroll, true);
 }
 
+
+// --- Main Message Listener ---
 
 /**
- * Listener for messages from the extension popup.
+ * Handles messages sent from the extension popup.
  */
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    // Mandatory: return true for asynchronous responses
-    let isAsync = false;
-
-    if (request.action === 'enabledStateChanged') {
-        isEnabled = request.enabled;
-        if (tooltipManager) {
-            if (!isEnabled) {
-                tooltipManager.hide();
-                aiEngine?.stopSpeaking();
-            }
-            tooltipManager.showStatus(
-                isEnabled ? "AI Assistant enabled" : "AI Assistant disabled", 
-                isEnabled ? "success" : "warning"
-            );
-            setTimeout(() => tooltipManager.hideStatus(), 2000);
-        }
-    }
-    
-    if (request.action === 'showTextInsights' && request.text) {
-        if (textAnalyzer && tooltipManager) {
-             const insights = textAnalyzer.analyzeText(request.text);
-             tooltipManager.showInsightsOnly(request.text, insights);
-        }
-    }
-    
-    if (request.action === 'getAIStatus') {
-        if (aiEngine) {
-             aiEngine.getStatus().then(status => sendResponse(status));
-             return true; // Indicates an asynchronous response
-        } else {
-             sendResponse({ status: "unavailable", message: "Initialization Pending", mode: "offline" });
-        }
-    }
-    
-    if (request.action === 'checkText' && request.text) {
-        if (aiEngine && tooltipManager) {
-            tooltipManager.showStatus("Checking selected text...", "info");
-            aiEngine.getSuggestions(request.text).then(suggestion => {
-                if (suggestion) {
-                    tooltipManager.showCenteredSuggestion(suggestion, request.text);
-                } else {
-                    tooltipManager.showStatus("No suggestions available", "info");
-                    setTimeout(() => tooltipManager.hideStatus(), 3000);
-                }
-            });
-            return true;
-        }
-    }
-
-    // --- Summarization Logic (Updated) ---
+    // Check if the action is to summarize the page
     if (request.action === "summarizePage") {
-        isAsync = true; // This response will be asynchronous
+        const rawContent = document.body ? document.body.innerHTML : '';
+        const cleanContent = cleanTextContent(rawContent);
 
-        (async () => {
-            const pageText = extractPageText();
-            if (pageText.length < 500) {
-                // Not enough content to summarize
-                sendResponse({
-                    summary: "Page content is too short (less than 500 characters) to generate a meaningful summary.",
-                    success: false
-                });
-                return;
-            }
+        if (cleanContent.length < MIN_CONTENT_LENGTH) {
+            sendResponse({
+                success: false,
+                summary: `Content is too short (less than ${MIN_CONTENT_LENGTH} characters) or mostly unreadable to summarize.`,
+            });
+            return true; // Keep the message channel open for sendResponse
+        }
 
-            const summary = await summarizeText(pageText);
-
-            // Check for explicit error message from summarizeText (which indicates API failure only)
-            if (summary.startsWith("Error:") && !summary.includes("Offline Summary Mode")) {
-                sendResponse({
-                    summary: summary,
-                    success: false
-                });
-            } else {
-                 sendResponse({
-                    summary: summary,
-                    success: true // Always success if we ran the fallback
-                });
-            }
-        })();
+        // Use the local fallback summarization
+        const summary = fallbackSummarizeText(cleanContent);
+        
+        // Send the result back to the popup
+        sendResponse({
+            success: true,
+            summary: summary,
+        });
+        
+        return true; // Keep the message channel open for sendResponse
     }
 
-    return isAsync;
+    // Check if the action is to read the text aloud
+    if (request.action === "speakText") {
+        if (request.text) {
+            speakText(request.text);
+            sendResponse({ success: true });
+        } else {
+            sendResponse({ success: false, message: "No text provided for TTS." });
+        }
+        return true;
+    }
+    
+    // Handle state changes from the popup
+    if (request.action === "enabledStateChanged") {
+        // The 'enabled' state mostly affects the popup UI, but we can update TTS setting too
+        isTTS = request.enableTTS !== undefined ? request.enableTTS : isTTS;
+        console.log(`Extension enabled state received. TTS is now: ${isTTS}`);
+        return true;
+    }
+    
+    if (request.action === "ttsStateChanged") {
+        isTTS = request.enableTTS;
+        console.log(`TTS state updated to: ${isTTS}`);
+        if (!isTTS && 'speechSynthesis' in window) {
+            // If TTS is disabled, stop any current speech
+            window.speechSynthesis.cancel();
+        }
+        return true;
+    }
 });
 
-
-// Start initialization when the DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-} else {
-    init();
-}
-
-console.log("AI Assistant Content Script loaded.");
+console.log("Refyne Assistant Content Script Initialized (Offline Fallback Mode).");
