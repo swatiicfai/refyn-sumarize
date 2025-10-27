@@ -108,23 +108,34 @@ document.addEventListener("DOMContentLoaded", async function () {
                     keyStatus.textContent = "Key is set.";
                     apiKeyInput.type = 'password';
                 } else {
-                     keyStatus.textContent = "Key not set.";
-                     apiKeyInput.type = 'text';
+                    keyStatus.textContent = "Key not set. Using Offline Mode.";
+                    apiKeyInput.type = 'text';
                 }
+                // Re-check AI status when key changes to update mode indicator
+                checkAIStatus(); 
             }
         }
     });
 
-    // --- Summarization Handler ---
+    // --- Summarization Handler (Refined for mode clarity) ---
 
     async function handleSummarizationClick() {
-        showSummaryResult("Loading...", "info");
         summarizeButton.disabled = true;
+
+        // Determine the current operational mode for the loading message
+        const keyResult = await new Promise(resolve => {
+            chrome.storage.local.get("geminiApiKey", resolve);
+        });
+        const hasKey = !!keyResult.geminiApiKey;
+        const modeLabel = hasKey ? "AI Summary (Online)" : "Fallback Summary (Offline)";
+
+        showSummaryResult(`Loading ${modeLabel}...`, "info");
 
         try {
             const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
             if (tabs[0] && tabs[0].id) {
                 // Send message to content.js to trigger the summarization logic
+                // content.js decides if it runs AI or the offline fallback based on the key
                 const response = await chrome.tabs.sendMessage(tabs[0].id, {
                     action: "summarizePage",
                 });
@@ -132,7 +143,7 @@ document.addEventListener("DOMContentLoaded", async function () {
                 if (response && response.success) {
                     showSummaryResult(response.summary, "success");
                 } else if (response && response.summary) {
-                    // Handles the 'content too short' error message from content.js
+                    // Handles the 'content too short' error message or explicit API error
                     showSummaryResult(response.summary, "error");
                 } else {
                     showSummaryResult("Failed to get summary. Content script might be unavailable.", "error");
@@ -171,7 +182,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         
         // If the user has explicitly set a key, assume online/AI mode is preferred
         if (hasKey) {
-            updateStatus("available", "API Key Loaded. AI Ready.", "ai");
+            updateStatus("available", "API Key Loaded. AI Ready (Online Mode).", "ai");
             if (keyStatus) keyStatus.textContent = "Key is set.";
         } else {
             if (keyStatus) keyStatus.textContent = "Key not set. Using Offline Mode.";
@@ -184,6 +195,7 @@ document.addEventListener("DOMContentLoaded", async function () {
                 });
                 
                 if (tabs[0] && tabs[0].id) {
+                    // Ask content script for status (which includes offline/internal AI status)
                     const response = await chrome.tabs.sendMessage(tabs[0].id, {
                         action: "getAIStatus",
                     });
@@ -194,14 +206,18 @@ document.addEventListener("DOMContentLoaded", async function () {
                     }
                 }
             } catch (error) {
-                console.log("Could not get AI status from content script:", error);
+                // This usually happens if the content script hasn't loaded or page is restricted
+                console.log("Could not get AI status from content script, falling back to system check:", error);
             }
             
+            // If content script failed to respond or didn't have AI capabilities (response.mode === "offline")
             const hasAISupport = await checkSystemAISupport();
             if (hasAISupport) {
-                 updateStatus("downloadable", "AI Supported, but Key is missing.", "offline");
+                 // The system *could* support AI, but the key is missing, so we use offline fallback.
+                 updateStatus("downloadable", "AI Supported, but Key is missing. Using Offline Fallback.", "offline");
             } else {
-                 updateStatus("unavailable", "AI Not Supported - Using Offline Mode", "offline");
+                 // System does not support AI, so we default to offline fallback.
+                 updateStatus("unavailable", "AI Not Supported - Using Offline Fallback", "offline");
             }
         }
     }
