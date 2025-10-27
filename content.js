@@ -6,7 +6,6 @@
  */
 
 // Global variables for AI interaction
-// NOTE: API_KEY is now retrieved dynamically from chrome.storage.local
 const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent";
 const MAX_RETRIES = 3;
 const MAX_TEXT_LENGTH = 15000; // API limits and performance considerations
@@ -24,6 +23,8 @@ let textAnalyzer = null;
 
 /**
  * Retrieves the Gemini API key from local storage.
+ * NOTE: This function is now primarily used to determine if we should use 
+ * the online or the offline summarization mode.
  * @returns {Promise<string|null>} The API key or null if not found.
  */
 function getApiKey() {
@@ -59,7 +60,38 @@ async function fetchWithRetry(apiCall, retries = MAX_RETRIES) {
 }
 
 /**
- * Calls the Gemini API to summarize the provided text.
+ * Generates a summary using a simple, local JavaScript heuristic (offline mode).
+ * This is the fallback when no API key is set.
+ * @param {string} text - The full text to summarize.
+ * @returns {string} The generated summary.
+ */
+function fallbackSummarizeText(text) {
+    const paragraphs = text.split('\n\n').filter(p => p.trim().length > 100);
+
+    if (paragraphs.length < 3) {
+        // If there are few paragraphs, just return the start of the text.
+        const intro = text.substring(0, Math.min(text.length, 500)).trim();
+        return `**[Offline Summary Mode]** Not enough structured content found. Showing the first few sentences: \n\n${intro}...`;
+    }
+
+    // Heuristic: Use the first two paragraphs and the final paragraph (if different).
+    const summaryParts = [
+        paragraphs[0].trim(),
+        paragraphs[1].trim()
+    ];
+
+    if (paragraphs.length > 2 && paragraphs[paragraphs.length - 1].trim() !== summaryParts[0].trim()) {
+        summaryParts.push(paragraphs[paragraphs.length - 1].trim());
+    }
+
+    // Combine into a simple summary.
+    return `**[Offline Summary Mode - Heuristic]**\n\n${summaryParts.join('\n\n')}\n\n*Note: This summary is generated locally without AI and only extracts key paragraphs.*`;
+}
+
+
+/**
+ * Calls the Gemini API to summarize the provided text (Online Mode).
+ * If the API key is missing, it runs the fallback summarization.
  * @param {string} text - The text to summarize.
  * @returns {Promise<string>} The generated summary or an error message.
  */
@@ -67,9 +99,12 @@ async function summarizeText(text) {
     const API_KEY = await getApiKey(); // Retrieve the stored API key
 
     if (!API_KEY) {
-        return "Error: Gemini API Key is not set in the extension popup. Cannot perform online summarization.";
+        // --- OFFLINE FALLBACK ---
+        console.log("Gemini API Key missing. Running offline summarization.");
+        return fallbackSummarizeText(text);
     }
-
+    
+    // --- ONLINE MODE ---
     const systemPrompt = "You are a professional summarization assistant. Summarize the following document content concisely and clearly in two to three paragraphs. Focus only on the main topics and conclusions.";
     const userQuery = `Please summarize this content: \n\n ${text}`;
 
@@ -93,11 +128,11 @@ async function summarizeText(text) {
             return generatedText;
         } else {
             console.error("Gemini API response missing generated text:", result);
-            return "AI failed to generate a summary. The input might be too complex or too short or the API key may be invalid.";
+            return "AI failed to generate a summary. The input might be too complex or too short or the API key may be invalid. Please check the API key.";
         }
     } catch (error) {
         console.error("Summarization API error:", error);
-        return `AI service error: ${error.message}`;
+        return `Error: AI service error during API call: ${error.message}`;
     }
 }
 
@@ -351,8 +386,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
             const summary = await summarizeText(pageText);
 
-            // Check for explicit error message from summarizeText (which indicates missing key or API failure)
-            if (summary.startsWith("Error:")) {
+            // Check for explicit error message from summarizeText (which indicates API failure only)
+            if (summary.startsWith("Error:") && !summary.includes("Offline Summary Mode")) {
                 sendResponse({
                     summary: summary,
                     success: false
@@ -360,7 +395,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             } else {
                  sendResponse({
                     summary: summary,
-                    success: true
+                    success: true // Always success if we ran the fallback
                 });
             }
         })();
