@@ -7,15 +7,15 @@
             width: 340px;
             padding: 0;
             margin: 0;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
             background: linear-gradient(135deg, #F5F3FF, #EDE9FE);
             min-height: 100vh;
         }
-        
+
         .container {
             padding: 20px;
         }
-        
+
         .header {
             display: flex;
             align-items: center;
@@ -24,7 +24,7 @@
             padding-bottom: 16px;
             border-bottom: 2px solid #E0E7FF;
         }
-        
+
         .header h1 {
             margin: 0;
             font-size: 22px;
@@ -34,7 +34,7 @@
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
-        
+
         .mode-indicator {
             font-size: 11px;
             font-weight: 600;
@@ -47,13 +47,13 @@
             align-items: center;
             gap: 4px;
         }
-        
+
         .mode-indicator.online {
             background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
             color: #065F46;
             border-color: #10B981;
         }
-        
+
         .status {
             padding: 16px;
             border-radius: 12px;
@@ -64,25 +64,25 @@
             border: 2px solid;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
         }
-        
+
         .status.ready {
             background: linear-gradient(135deg, #ECFDF5, #D1FAE5);
             color: #065F46;
             border-color: #10B981;
         }
-        
+
         .status.downloading {
             background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
             color: #1E40AF;
             border-color: #3B82F6;
         }
-        
+
         .status.error {
             background: linear-gradient(135deg, #FEF3C7, #FDE68A);
             color: #92400E;
             border-color: #F59E0B;
         }
-        
+
         .stats {
             background: linear-gradient(135deg, #FFFFFF, #F8FAFC);
             padding: 18px;
@@ -92,7 +92,7 @@
             border: 2px solid #E0E7FF;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
         }
-        
+
         .stat-item {
             display: flex;
             justify-content: space-between;
@@ -100,23 +100,23 @@
             padding: 8px 0;
             border-bottom: 1px solid #F1F5F9;
         }
-        
+
         .stat-item:last-child {
             margin-bottom: 0;
             border-bottom: none;
         }
-        
+
         .stat-item span:first-child {
             color: #64748B;
             font-weight: 500;
         }
-        
+
         .stat-item span:last-child {
             color: #6366F1;
             font-weight: 700;
             font-size: 14px;
         }
-        
+
         .toggle-section {
             background: linear-gradient(135deg, #FFFFFF, #F8FAFC);
             padding: 16px;
@@ -125,7 +125,7 @@
             border: 2px solid #E0E7FF;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
         }
-        
+
         .toggle {
             display: flex;
             align-items: center;
@@ -135,24 +135,24 @@
             font-weight: 600;
             color: #374151;
         }
-        
+
         .toggle:last-child {
             margin-bottom: 0;
         }
-        
+
         .switch {
             position: relative;
             display: inline-block;
             width: 52px;
             height: 28px;
         }
-        
+
         .switch input {
             opacity: 0;
             width: 0;
             height: 0;
         }
-        
+
         .slider {
             position: absolute;
             cursor: pointer;
@@ -165,7 +165,7 @@
             border-radius: 28px;
             box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
         }
-        
+
         .slider:before {
             position: absolute;
             content: "";
@@ -178,15 +178,15 @@
             border-radius: 50%;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
-        
+
         input:checked + .slider {
             background: linear-gradient(135deg, #6366F1, #8B5CF6);
         }
-        
+
         input:checked + .slider:before {
             transform: translateX(24px);
         }
-        
+
         .footer {
             text-align: center;
             padding-top: 16px;
@@ -195,22 +195,14 @@
             font-size: 11px;
             font-weight: 600;
         }
-        
-        .icon {
-            width: 14px;
-            height: 14px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
+
         .setting-item {
             display: flex;
             align-items: center;
             justify-content: space-between;
             padding: 12px 0;
         }
-        
+
         .setting-item span {
             font-size: 14px;
             font-weight: 600;
@@ -223,7 +215,174 @@
             display: inline-block;
             vertical-align: middle;
             margin-right: 6px;
+            color: #6366F1;
         }
+        
+        /* --- NEW API/ACTION STYLES --- */
+
+        #apiKeySection {
+            background: linear-gradient(135deg, #FFFFFF, #F8FAFC);
+            padding: 16px;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            border: 2px solid #D1D5DB;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        #apiKeySection label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 6px;
+        }
+
+        #apiKeySection input {
+            width: calc(100% - 70px);
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid #D1D5DB;
+            background-color: #F9FAFB;
+            font-size: 13px;
+            color: #374151;
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+            transition: border-color 0.2s;
+        }
+        
+        #apiKeySection input:focus {
+            border-color: #6366F1;
+            outline: none;
+        }
+        
+        .api-input-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .action-button {
+            width: 100%;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .action-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #summarizeBtn {
+            background: linear-gradient(135deg, #10B981, #059669);
+            color: white;
+            box-shadow: 0 4px 6px rgba(16, 185, 129, 0.3);
+        }
+
+        #summarizeBtn:not(:disabled):hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        #speakBtn {
+            background: linear-gradient(135deg, #6366F1, #8B5CF6);
+            color: white;
+            box-shadow: 0 4px 6px rgba(99, 102, 241, 0.3);
+        }
+
+        #speakBtn:not(:disabled):hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        #resultsSection {
+            margin-top: 16px;
+            background: linear-gradient(135deg, #FFFFFF, #F8FAFC);
+            padding: 16px;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            border: 2px solid #E0E7FF;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        .summary-box {
+            min-height: 70px;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #E0E7FF;
+            background-color: #F9FAFB;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #374151;
+            word-break: break-word;
+            margin-bottom: 10px;
+        }
+        
+        .summary-box h3 {
+            margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 15px;
+            font-weight: 700;
+            color: #6366F1;
+        }
+
+        .sources-box {
+            font-size: 11px;
+            color: #64748B;
+            padding: 8px;
+            border-top: 1px solid #F1F5F9;
+        }
+        
+        .sources-box a {
+            color: #8B5CF6;
+            text-decoration: none;
+        }
+        
+        .sources-box a:hover {
+            text-decoration: underline;
+        }
+        
+        #key-message {
+            font-size: 11px;
+            margin-top: 8px;
+            font-weight: 600;
+        }
+        
+        .text-green { color: #059669; }
+        .text-yellow { color: #D97706; }
+        .spinner {
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top: 2px solid white;
+            border-radius: 50%;
+            width: 14px;
+            height: 14px;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .action-icon {
+            width: 16px;
+            height: 16px;
+            margin-right: 8px;
+        }
+        
+        #speakBtn.playing {
+            background: linear-gradient(135deg, #EC4899, #DB2777);
+            box-shadow: 0 4px 8px rgba(236, 72, 153, 0.5);
+        }
+        
     </style>
 </head>
 <body>
@@ -234,10 +393,56 @@
                 <svg class="svg-icon" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
                 </svg>
-                <span>Offline</span>
+                <span id="modeStatusText">Offline</span>
             </div>
         </div>
         
+        <div id="status" class="status error">
+            <svg class="svg-icon" viewBox="0 0 24 24" fill="currentColor" style="width: 16px; height: 16px; margin-right: 8px;">
+                <path d="M12 2L2 22h20L12 2zm0 6v6m0 4h.01"/>
+            </svg>
+            <span id="statusMessage">Checking AI status...</span>
+        </div>
+        
+        <!-- API Key Management Section (New) -->
+        <div id="apiKeySection">
+            <label for="apiKey">Gemini API Key</label>
+            <div class="api-input-group">
+                <input type="password" id="apiKey" placeholder="Enter key (required for online features)">
+                <button id="saveKey" class="action-button" style="width: 60px; margin: 0; padding: 8px 0; background: #6366F1; color: white; box-shadow: none;">Save</button>
+            </div>
+            <p id="key-message" class="text-yellow">Key not set.</p>
+        </div>
+        
+        <!-- Summarize and Speak Buttons (New) -->
+        <button id="summarizeBtn" class="action-button" disabled>
+            <svg class="action-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path fill-rule="evenodd" d="M7.5 6a4.5 4.5 0 1 1 9 0 4.5 4.5 0 0 1-9 0ZM3.751 20.105a8.25 8.25 0 0 1 16.498 0 .75.75 0 0 1-.437.695A18.683 18.683 0 0 1 12 22.5c-2.73 0-5.46-.61-7.812-1.7a.75.75 0 0 1-.437-.695Z" clip-rule="evenodd" />
+                <path d="M10.75 14.5a.75.75 0 0 0-1.5 0v3a.75.75 0 0 0 1.5 0v-3ZM13.25 14.5a.75.75 0 0 0-1.5 0v3a.75.75 0 0 0 1.5 0v-3ZM15.75 14.5a.75.75 0 0 0-1.5 0v3a.75.75 0 0 0 1.5 0v-3Z" />
+            </svg>
+            Summarize Page
+        </button>
+        
+        <button id="speakBtn" class="action-button" disabled>
+            <svg class="action-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.75 12a.75.75 0 0 0-.75-.75H5.877c-.504 0-.84.5-.596.936l.723 1.267c.23.402.66.604 1.085.604h11.233a.75.75 0 0 0 .75-.75Zm0 0-2.85 2.85M18.75 12 15.9 9.15" />
+                <path d="M22.5 12a10.5 10.5 0 1 1-21 0 10.5 10.5 0 0 1 21 0Z" />
+            </svg>
+            Speak Summary
+        </button>
+        
+        <!-- Summary Output Section (New) -->
+        <div id="resultsSection" class="hidden">
+            <div class="summary-box">
+                <h3>Summary</h3>
+                <div id="summaryOutput"></div>
+            </div>
+            <div class="sources-box">
+                <h3>Sources</h3>
+                <div id="sourcesOutput">No sources yet.</div>
+            </div>
+        </div>
+
         <div class="toggle-section">
             <div class="toggle">
                 <span>Enable Refyne</span>
@@ -246,13 +451,6 @@
                     <span class="slider"></span>
                 </label>
             </div>
-        </div>
-        
-        <div id="status" class="status error">
-            <svg class="svg-icon" viewBox="0 0 24 24" fill="currentColor" style="width: 16px; height: 16px; margin-right: 8px;">
-                <path d="M12 2L2 22h20L12 2zm0 6v6m0 4h.01"/>
-            </svg>
-            Checking AI status...
         </div>
         
         <div class="stats">
@@ -270,7 +468,7 @@
             <div class="setting-item">
                 <span>
                     <svg class="svg-icon" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                        <path d="M10.5 1.5a.75.75 0 0 0-.75.75V3a.75.75 0 0 0 1.5 0V2.25a.75.75 0 0 0-.75-.75Zm0 17.25a.75.75 0 0 0-.75.75V21a.75.75 0 0 0 1.5 0v-1.5a.75.75 0 0 0-.75-.75Zm-9-7.5a.75.75 0 0 0 .75.75h1.5a.75.75 0 0 0 0-1.5H2.25a.75.75 0 0 0-.75.75ZM18.75 9a.75.75 0 0 0 .75.75h1.5a.75.75 0 0 0 0-1.5h-1.5a.75.75 0 0 0-.75.75ZM12 6a.75.75 0 0 0-.75.75V8a.75.75 0 0 0 1.5 0V6.75A.75.75 0 0 0 12 6Zm-2.5 12a.75.75 0 0 0 1.5 0V17a.75.75 0 0 0-1.5 0v1Zm10.75-7.5a.75.75 0 0 0-.75-.75H19a.75.75 0 0 0 0 1.5h1.5a.75.75 0 0 0 .75-.75ZM12 4a.75.75 0 0 0-.75.75v1.5a.75.75 0 0 0 1.5 0V4.75A.75.75 0 0 0 12 4ZM4.5 9a.75.75 0 0 0-.75.75v1.5a.75.75 0 0 0 1.5 0V9.75A.75.75 0 0 0 4.5 9ZM19.5 14.25a.75.75 0 0 0-.75.75v1.5a.75.75 0 0 0 1.5 0v-1.5a.75.75 0 0 0-.75-.75Z" />
                     </svg>
                     Text-to-Speech
                 </span>
