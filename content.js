@@ -6,7 +6,7 @@
  */
 
 // Global variables for AI interaction
-const API_KEY = ""; // Canvas environment will provide the key at runtime if needed
+// NOTE: API_KEY is now retrieved dynamically from chrome.storage.local
 const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent";
 const MAX_RETRIES = 3;
 const MAX_TEXT_LENGTH = 15000; // API limits and performance considerations
@@ -21,6 +21,18 @@ let aiEngine = null;
 let textAnalyzer = null;
 
 // --- 1. Helper Functions for Gemini API Communication with Retry ---
+
+/**
+ * Retrieves the Gemini API key from local storage.
+ * @returns {Promise<string|null>} The API key or null if not found.
+ */
+function getApiKey() {
+    return new Promise(resolve => {
+        chrome.storage.local.get("geminiApiKey", (result) => {
+            resolve(result.geminiApiKey || null);
+        });
+    });
+}
 
 /**
  * Implements exponential backoff for API calls.
@@ -52,6 +64,12 @@ async function fetchWithRetry(apiCall, retries = MAX_RETRIES) {
  * @returns {Promise<string>} The generated summary or an error message.
  */
 async function summarizeText(text) {
+    const API_KEY = await getApiKey(); // Retrieve the stored API key
+
+    if (!API_KEY) {
+        return "Error: Gemini API Key is not set in the extension popup. Cannot perform online summarization.";
+    }
+
     const systemPrompt = "You are a professional summarization assistant. Summarize the following document content concisely and clearly in two to three paragraphs. Focus only on the main topics and conclusions.";
     const userQuery = `Please summarize this content: \n\n ${text}`;
 
@@ -75,7 +93,7 @@ async function summarizeText(text) {
             return generatedText;
         } else {
             console.error("Gemini API response missing generated text:", result);
-            return "AI failed to generate a summary. The input might be too complex or too short.";
+            return "AI failed to generate a summary. The input might be too complex or too short or the API key may be invalid.";
         }
     } catch (error) {
         console.error("Summarization API error:", error);
@@ -333,10 +351,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
             const summary = await summarizeText(pageText);
 
-            sendResponse({
-                summary: summary,
-                success: true
-            });
+            // Check for explicit error message from summarizeText (which indicates missing key or API failure)
+            if (summary.startsWith("Error:")) {
+                sendResponse({
+                    summary: summary,
+                    success: false
+                });
+            } else {
+                 sendResponse({
+                    summary: summary,
+                    success: true
+                });
+            }
         })();
     }
 
